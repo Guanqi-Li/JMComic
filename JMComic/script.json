@@ -1,0 +1,22 @@
+{
+  "contributors": [],
+  "permissions": null,
+  "runInApp": false,
+  "localizedNames": {
+    "zh": "JMComic",
+    "en": "JMComic"
+  },
+  "localizedDescriptions": {
+    "zh": "JMComic 账号收藏、观看历史、首页推荐、直接搜索与全屏阅读。",
+    "en": "JMComic account library, homepage recommendations, search and immersive reader."
+  },
+  "icon": "books.vertical",
+  "color": "rgba(0, 0, 0, 1.00)",
+  "intentInputTypes": [],
+  "description": "JMComic 账号收藏、观看历史、首页推荐、直接搜索与全屏阅读。",
+  "iconImage": null,
+  "entry": "index.tsx",
+  "author": null,
+  "name": "JMComic",
+  "version": "4.1.0"
+}
