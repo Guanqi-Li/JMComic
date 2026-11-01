@@ -12,11 +12,11 @@ const {ChapterStream}=evaluate('features/reader/chapter-stream.ts',()=>({}));
  const pending=stale.appendNext();await stale.select(chapters[0]);release(makePages('2'));await pending;assert.equal(stale.segments.length,1);assert.equal(stale.segments[0].chapter.id,'3');
  console.log('PASS chapter order, deduplicated append, no skipped tail page, per-chapter boundaries, final chapter stops, stale request isolation');
 
- const slots=[],effects=[],timers=[],reads=[],saved=[],snapshots=[],scrolls=[];let cursor=0, dismissals=0, presentations=0;
+ const slots=[],effects=[],timers=[],reads=[],saved=[],snapshots=[],scrolls=[];let cursor=0, dismissals=0, presentations=0, restoredPage=0;
  const native=new Proxy({useObservable:v=>{const i=cursor++;if(!slots[i])slots[i]={value:typeof v==='function'?v():v,setValue(x){this.value=x}};return slots[i]},useRef:v=>{const i=cursor++;if(!slots[i])slots[i]={current:v};return slots[i]},useEffect:(fn,deps)=>{const i=cursor++;if(!slots[i]){slots[i]=deps;effects.push(fn)}},Navigation:{useDismiss:()=>()=>{dismissals++},present:async()=>{presentations++}}},{get:(obj,k)=>k in obj?obj[k]:String(k)});
  const DeferredPageImage=()=>{};
  const context={Date,Promise,console,setTimeout:(fn,delay)=>{timers.push({fn,delay,cancelled:false});return timers.length},clearTimeout:id=>{if(timers[id-1])timers[id-1].cancelled=true},React:{createElement:(type,props,...children)=>({type,props:props||{},children:children.flat(Infinity)})}};
- const mocks=id=>id==='scripting'?native:id==='./chapter-stream'?{ChapterStream}:id==='./deferred-page-image'?{DeferredPageImage}:id==='../../online-storage'?{buildOnlineReaderProgressKey:i=>i.chapterId,getOnlineChapterProgress:()=>({lastPage:0,totalPages:0}),pushOnlineReadingHistory:r=>snapshots.push(r)}:id==='../../library-storage'?{saveProgressData:(...args)=>saved.push(args)}:id==='../../jm-account'?{recordJMAccountReading:async id=>reads.push(id)}:{};
+ const mocks=id=>id==='scripting'?native:id==='./chapter-stream'?{ChapterStream}:id==='./deferred-page-image'?{DeferredPageImage}:id==='../../online-storage'?{buildOnlineReaderProgressKey:i=>i.chapterId,getOnlineChapterProgress:()=>({lastPage:restoredPage,totalPages:2,lastReadAt:100}),pushOnlineReadingHistory:r=>snapshots.push(r)}:id==='../../library-storage'?{saveProgressData:(...args)=>saved.push(args)}:id==='../../jm-account'?{recordJMAccountReading:async id=>reads.push(id)}:{};
  const {ComicReaderView}=evaluate('features/reader/comic-reader-view.tsx',mocks,context);
  let fetches=0;const props={fileName:'Mock',initialPages:makePages('1'),onlineProgress:{sourceId:'zh.jmcomic',comicId:'42',chapterId:'1',chapterOrder:1,comicTitle:'Mock',chapterTitle:'One',host:'go2778'},chapters,selectedChapter:chapters[2],loadChapterPages:async chapter=>{fetches++;return makePages(chapter.id)}};
  const render=()=>{cursor=0;return ComicReaderView(props)};
@@ -40,6 +40,12 @@ const {ChapterStream}=evaluate('features/reader/chapter-stream.ts',()=>({}));
  for(const timer of timers.filter(t=>t.delay===4000&&!t.cancelled))timer.fn();assert(!all(render()).some(n=>n.type==='Button'&&n.props.title==='返回'));
  images[2].props.onDisappear();images[4].props.onAppear();images[4].props.onTapGesture();nodes=all(render());assert(nodes.some(n=>n.type==='Text'&&n.children.includes('第 3 章')));assert(nodes.some(n=>n.type==='Text'&&n.children.includes('Three')));
  const back=nodes.find(n=>n.type==='Button'&&n.props.title==='返回');back.props.action();back.props.action();assert.equal(dismissals,1);assert.equal(presentations,0);assert.equal(snapshots.at(-1).chapterId,'3');
+ // Reopen a saved chapter and verify the actual reader scrolls to its saved page.
+ slots.length=0;effects.length=0;timers.length=0;scrolls.length=0;restoredPage=1;
+ tree=render();for(const effect of effects.splice(0))effect();all(tree);
+ for(const timer of timers.filter(t=>[100,300].includes(t.delay)&&!t.cancelled))timer.fn();
+ assert.equal(scrolls.length,2);assert.equal(scrolls[0][0],'1:1_1');assert.equal(scrolls[0][1],'top');
+ console.log('PASS reopening a chapter restores the saved page in the reader');
  console.log('PASS single reader dismiss after automatic chapter transitions, live top chapter title, both controls auto-hide');
  console.log('PASS immersive reader structure, zero spacing, load only at decoded tail, append without jump, transient chapter controls, per-chapter progress/history');
 })().catch(error=>{console.error(error);process.exitCode=1});

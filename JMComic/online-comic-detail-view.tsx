@@ -327,9 +327,13 @@ export function OnlineComicDetailView(props: {
 
   const coverFrame = { width: 122, height: 174 }
   const latestChapter = chapters.value[0] ?? null
+  const firstChapter = chapters.value.reduce<OnlineChapter | null>(
+    (first, chapter) => !first || chapter.order < first.order ? chapter : first,
+    null,
+  )
   const sourceId = onlineAdapter.descriptor().id
   const continueChapter = props.getContinueChapter(sourceId, props.comicId, chapters.value)
-  const primaryChapter = continueChapter ?? latestChapter
+  const primaryChapter = continueChapter ?? firstChapter
   const displayedChapters = chapterAscending.value ? [...chapters.value].reverse() : chapters.value
   const continueIdentity = continueChapter ? { sourceId, comicId: props.comicId, chapterId: continueChapter.id, chapterOrder: continueChapter.order } : null
   const continueProgress = continueIdentity ? props.getOnlineChapterProgress(continueIdentity) : null
