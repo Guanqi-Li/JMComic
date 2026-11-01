@@ -2,12 +2,16 @@ import { withPageLoadSlot } from "../../page-load-queue"
 import type { PageItem } from "../../types"
 import type { ChapterStream } from "./chapter-stream"
 
-type PendingPage = { task: Promise<string>; visible: boolean; valid: () => boolean }
+type PendingPage = { task: Promise<string>; visible: boolean; valid: () => boolean; path?: string }
 
 export class ReaderPreloader {
   private pending = new WeakMap<() => Promise<string>, PendingPage>()
   private generation = 0
   private active = true
+
+  cachedPath(page: PageItem): string {
+    return page.path || (page.loadLocalFile ? this.pending.get(page.loadLocalFile)?.path : "") || ""
+  }
 
   // Foreground and background requests share one task and the decoded local file.
   load(page: PageItem, visible = true, valid: () => boolean = () => true): Promise<string> {
@@ -26,6 +30,7 @@ export class ReaderPreloader {
       if (!path) throw new Error("图片数据为空")
       return path
     }, () => entry.visible ? 1 : 0).then(path => {
+      entry.path = path
       if (!path) this.pending.delete(loader)
       return path
     }).catch(error => {

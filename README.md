@@ -1,6 +1,6 @@
 # JMComic
 
-用于 Scripting 的私人漫画阅读脚本。当前版本 **4.2.3**。
+用于 Scripting 的私人漫画阅读脚本。当前版本 **4.2.4**。
 
 ## 远程导入
 
@@ -28,7 +28,7 @@ https://raw.githubusercontent.com/Guanqi-Li/JMComic/main/dist/JMComic.zip
 
 首次进入设置输入自己的 JMComic 账号密码并登录。账号密码、Cookie、个人收藏列表和调试抓包均不在仓库或安装包内。
 
-建议使用支持 WebView Cookie 管理的最新版 Scripting。原生布局和系统全屏效果需要在 iPhone / iPad 上验证。
+建议使用支持 WebView Cookie 管理及 scrollPosition 的最新版 Scripting（3.1.0 或以上）；iOS 18+ 可通过原生可见目标集合识别一屏内的短章节。原生布局和系统全屏效果需要在 iPhone / iPad 上验证。
 
 ## 维护
 
@@ -39,6 +39,13 @@ https://raw.githubusercontent.com/Guanqi-Li/JMComic/main/dist/JMComic.zip
 脚本基于用户提供的原始阅读脚本改造，保留原有 JM 请求与图片还原实现。网络可用性取决于 JMComic 网站、接口和当前网络。
 
 远程导入与更新行为参见 [Scripting 官方文档](https://scriptingapp.github.io/guide/Script/Script)。
+
+## 4.2.4
+
+- 阅读位置改由原生 scrollPosition 追踪；移除延迟重复滚动，显示控制栏和自动接章不再主动改变位置。
+- 自动接章只依据实际滚动位置或原生可见目标，不再依赖懒加载 onAppear；预加载完成不会把进度写到下一章末尾。
+- 重复选择当前章节保留位置；未完成恢复便退出时不会覆盖原有进度。
+- 预取图片首次布局直接使用本地缓存及原始宽高比，未加载图片预留一屏高度，减少布局突变。
 
 ## 4.2.3
 

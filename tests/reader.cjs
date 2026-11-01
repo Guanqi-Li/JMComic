@@ -14,40 +14,93 @@ const {ReaderPreloader}=evaluate('features/reader/reader-preloader.ts',()=>pageQ
  const pending=stale.appendNext();await stale.select(chapters[0]);release(makePages('2'));await pending;assert.equal(stale.segments.length,1);assert.equal(stale.segments[0].chapter.id,'3');
  console.log('PASS chapter order, deduplicated append, no skipped tail page, per-chapter boundaries, final chapter stops, stale request isolation');
 
- const slots=[],effects=[],timers=[],reads=[],saved=[],snapshots=[],scrolls=[];let cursor=0, dismissals=0, presentations=0, restoredPage=0;
- const native=new Proxy({useObservable:v=>{const i=cursor++;if(!slots[i])slots[i]={value:typeof v==='function'?v():v,setValue(x){this.value=x}};return slots[i]},useRef:v=>{const i=cursor++;if(!slots[i])slots[i]={current:v};return slots[i]},useEffect:(fn,deps)=>{const i=cursor++;if(!slots[i]){slots[i]=deps;effects.push(fn)}},Navigation:{useDismiss:()=>()=>{dismissals++},present:async()=>{presentations++}}},{get:(obj,k)=>k in obj?obj[k]:String(k)});
- const DeferredPageImage=()=>{};
- const context={Date,Promise,console,setTimeout:(fn,delay)=>{timers.push({fn,delay,cancelled:false});return timers.length},clearTimeout:id=>{if(timers[id-1])timers[id-1].cancelled=true},React:{createElement:(type,props,...children)=>({type,props:props||{},children:children.flat(Infinity)})}};
- const mocks=id=>id==='scripting'?native:id==='./chapter-stream'?{ChapterStream}:id==='./reader-preloader'?{ReaderPreloader}:id==='./deferred-page-image'?{DeferredPageImage}:id==='../../online-storage'?{buildOnlineReaderProgressKey:i=>i.chapterId,getOnlineChapterProgress:()=>({lastPage:restoredPage,totalPages:2,lastReadAt:100}),pushOnlineReadingHistory:r=>snapshots.push(r)}:id==='../../library-storage'?{saveProgressData:(...args)=>saved.push(args)}:id==='../../jm-account'?{recordJMAccountReading:async id=>reads.push(id)}:{};
- const {ComicReaderView}=evaluate('features/reader/comic-reader-view.tsx',mocks,context);
- let fetches=0;const props={fileName:'Mock',initialPages:makePages('1'),onlineProgress:{sourceId:'zh.jmcomic',comicId:'42',chapterId:'1',chapterOrder:1,comicTitle:'Mock',chapterTitle:'One',host:'go2778'},chapters,selectedChapter:chapters[2],loadChapterPages:async chapter=>{fetches++;return makePages(chapter.id)}};
- const render=()=>{cursor=0;return ComicReaderView(props)};
- const proxy={scrollTo:(...args)=>scrolls.push(args)};
- function all(node){if(!node||typeof node!=='object')return [];return [node,...(node.children||[]).flatMap(child=>typeof child==='function'&&node.type==='ScrollViewReader'?all(child(proxy)):all(child))]}
- const settle=async()=>{for(let i=0;i<12;i++)await Promise.resolve()};
- let tree=render();for(const effect of effects.splice(0))effect();let nodes=all(tree);
- assert.equal(tree.props.statusBarHidden,true);assert.equal(tree.props.toolbarVisibility,'hidden');assert(!nodes.some(n=>['Slider','Toolbar','NavigationStack'].includes(n.type)));assert(nodes.some(n=>n.type==='LazyVStack'&&n.props.spacing===0));
- let images=nodes.filter(n=>n.type===DeferredPageImage);images[0].props.onAppear();images[1].props.onLoaded();await settle();assert.equal(fetches,1);assert.equal(all(render()).filter(n=>n.type===DeferredPageImage).length,2);assert.equal(snapshots.length,0);
- let tail=nodes.find(n=>String(n.props.key||'').startsWith('end:'));tail.props.onAppear();await settle();assert.equal(fetches,1);
- tree=render();nodes=all(tree);images=nodes.filter(n=>n.type===DeferredPageImage);assert.equal(images.length,4);assert.equal(images[0].props.item.id,'1:1_0');assert.equal(scrolls.length,0);
- // Newly appended metadata does not trigger another chapter while the old tail remains visible.
- images[3].props.onLoaded();await settle();assert.equal(fetches,1);
- tail=nodes.find(n=>String(n.props.key||'').startsWith('end:'));tail.props.onAppear();await settle();assert.equal(fetches,2);
- tree=render();nodes=all(tree);images=nodes.filter(n=>n.type===DeferredPageImage);assert.equal(images.length,6);
- images[0].props.onDisappear();images[2].props.onAppear();images[0].props.onTapGesture();tree=render();nodes=all(tree);
- for(const title of ['上一章','下一章','目录','返回'])assert(nodes.some(n=>n.type==='Button'&&n.props.title===title));
- assert(!nodes.some(n=>n.type==='Button'&&n.props.title==='退出阅读'));
- assert(nodes.some(n=>n.type==='Text'&&n.children.includes('第 2 章')));assert(nodes.some(n=>n.type==='Text'&&n.children.includes('Two')));assert.equal(presentations,0);
- assert(!nodes.some(n=>n.type==='Slider'));for(const timer of timers.filter(t=>t.delay===800&&!t.cancelled))timer.fn();assert.equal(snapshots.at(-1).chapterId,'2');assert.equal(saved.at(-1)[1],0);assert.equal(saved.at(-1)[2],2);assert(reads.includes('2'));
- for(const timer of timers.filter(t=>t.delay===4000&&!t.cancelled))timer.fn();assert(!all(render()).some(n=>n.type==='Button'&&n.props.title==='返回'));
- images[2].props.onDisappear();images[4].props.onAppear();images[4].props.onTapGesture();nodes=all(render());assert(nodes.some(n=>n.type==='Text'&&n.children.includes('第 3 章')));assert(nodes.some(n=>n.type==='Text'&&n.children.includes('Three')));
- const back=nodes.find(n=>n.type==='Button'&&n.props.title==='返回');back.props.action();back.props.action();assert.equal(dismissals,1);assert.equal(presentations,0);assert.equal(snapshots.at(-1).chapterId,'3');
- // Reopen a saved chapter and verify the actual reader scrolls to its saved page.
- slots.length=0;effects.length=0;timers.length=0;scrolls.length=0;restoredPage=1;
- tree=render();for(const effect of effects.splice(0))effect();all(tree);
- for(const timer of timers.filter(t=>[100,300].includes(t.delay)&&!t.cancelled))timer.fn();
- assert.equal(scrolls.length,2);assert.equal(scrolls[0][0],'1:1_1');assert.equal(scrolls[0][1],'top');
- console.log('PASS reopening a chapter restores the saved page in the reader');
- console.log('PASS single reader dismiss after automatic chapter transitions, live top chapter title, both controls auto-hide');
- console.log('PASS immersive reader structure, zero spacing, append only at decoded tail, append without jump, transient chapter controls, per-chapter progress/history');
+ function fixture(lastPage=0) {
+  const slots=[],effects=[],timers=[],reads=[],saved=[],snapshots=[],presented=[];let cursor=0,dismissals=0;
+  const native=new Proxy({
+   useObservable:v=>{const i=cursor++;if(!slots[i])slots[i]={value:v,setValue(x){this.value=x}};return slots[i]},
+   useRef:v=>{const i=cursor++;if(!slots[i])slots[i]={current:v};return slots[i]},
+   useEffect:fn=>{const i=cursor++;if(!slots[i]){slots[i]=true;effects.push(fn)}},
+   Navigation:{useDismiss:()=>()=>{dismissals++},present:async p=>{presented.push(p.element)}}
+  },{get:(obj,k)=>k in obj?obj[k]:String(k)});
+  const DeferredPageImage=()=>{};
+  const context={Date,Promise,console,setTimeout:(fn,delay)=>{timers.push({fn,delay,cancelled:false});return timers.length},clearTimeout:id=>{if(timers[id-1])timers[id-1].cancelled=true},React:{createElement:(type,props,...children)=>({type,props:props||{},children:children.flat(Infinity)})}};
+  const mocks=id=>id==='scripting'?native:id==='./chapter-stream'?{ChapterStream}:id==='./reader-preloader'?{ReaderPreloader}:id==='./deferred-page-image'?{DeferredPageImage}:id==='../../online-storage'?{buildOnlineReaderProgressKey:i=>i.chapterId,getOnlineChapterProgress:()=>({lastPage,totalPages:2,lastReadAt:100}),pushOnlineReadingHistory:r=>snapshots.push(r)}:id==='../../library-storage'?{saveProgressData:(...args)=>saved.push(args)}:id==='../../jm-account'?{recordJMAccountReading:async id=>reads.push(id)}:{};
+  const {ComicReaderView}=evaluate('features/reader/comic-reader-view.tsx',mocks,context);
+  const props={fileName:'Mock',initialPages:makePages('1'),onlineProgress:{sourceId:'zh.jmcomic',comicId:'42',chapterId:'1',chapterOrder:1,comicTitle:'Mock',chapterTitle:'One',host:'go2778'},chapters,selectedChapter:chapters[2],loadChapterPages:async c=>makePages(c.id)};
+  const render=()=>{cursor=0;return ComicReaderView(props)};
+  function all(node){if(!node||typeof node!=='object')return [];return [node,...(node.children||[]).flatMap(child=>typeof child==='function'&&node.type==='GeometryReader'?all(child({size:{width:390,height:844}})):all(child))]}
+  const nodes=()=>all(render());
+  const images=()=>nodes().filter(n=>n.type===DeferredPageImage);
+  const scroll=()=>nodes().find(n=>n.type==='ScrollView');
+  const change=id=>scroll().props.scrollPosition.onChanged(id);
+  const flush=delay=>{const pending=timers.filter(t=>t.delay===delay&&!t.cancelled);for(const timer of pending){timer.cancelled=true;timer.fn()}};
+  const button=title=>nodes().find(n=>n.type==='Button'&&n.props.title===title);
+  const show=()=>{if(!button('目录'))images()[0].props.onTapGesture()};
+  const choose=async chapter=>{show();await button('目录').props.action();const directory=presented.at(-1).children[0];await directory.props.onChoose(chapter)};
+  render();for(const effect of effects.splice(0))effect();
+  return {render,nodes,images,scroll,change,flush,show,button,choose,snapshots,saved,reads,timers,presented,get dismissals(){return dismissals}};
+ }
+ const settle=async()=>{for(let i=0;i<40;i++)await Promise.resolve()};
+ const reader=fixture();await settle();
+ assert.equal(reader.render().props.statusBarHidden,true);assert.equal(reader.render().props.toolbarVisibility,'hidden');
+ assert(!reader.nodes().some(n=>['ScrollViewReader','Slider','Toolbar'].includes(n.type)));
+ assert(reader.nodes().some(n=>n.type==='LazyVStack'&&n.props.spacing===0&&n.props.scrollTargetLayout));
+ assert.equal(reader.scroll().props.key,'reader-scroll');
+ assert.equal(reader.scroll().props.scrollPosition.value,'1:1_0');
+ let images=reader.images();
+ images[1].props.onLoaded();await settle();
+ assert.equal(reader.images().length,2);assert.equal(reader.snapshots.length,0);assert.equal(reader.reads.length,0);
+ assert(!reader.nodes().some(n=>n.props.key==='reader-end')); // Status UI is outside the scroll target layout.
+ images[0].props.onLoaded();reader.change('1:1_0');reader.flush(800);
+ assert.equal(reader.saved.at(-1)[1],0);
+ reader.change('1:1_1');await settle();
+ assert.equal(reader.images().length,4);assert.equal(reader.scroll().props.scrollPosition.value,'1:1_1');
+ assert.equal(reader.scroll().props.key,'reader-scroll');
+ // An off-screen next-chapter tail may be created/decoded early, without changing position or appending again.
+ reader.images()[3].props.onLoaded();await settle();reader.flush(800);
+ assert.equal(reader.images().length,4);assert.equal(reader.scroll().props.scrollPosition.value,'1:1_1');
+ assert.equal(reader.snapshots.at(-1).chapterId,'1');assert.equal(reader.saved.at(-1)[1],1);
+ reader.change('2:2_0');reader.images()[2].props.onLoaded();reader.flush(800);
+ assert.equal(reader.snapshots.at(-1).chapterId,'2');assert.equal(reader.saved.at(-1)[1],0);
+ reader.show();
+ for(const title of ['上一章','下一章','目录','返回'])assert(reader.button(title));
+ assert(reader.nodes().some(n=>n.type==='Text'&&n.children.includes('第 2 章')));
+ assert(reader.nodes().some(n=>n.type==='Text'&&n.children.includes('Two')));
+ const before=reader.scroll().props.scrollPosition.value;
+ await reader.choose(chapters[1]);assert.equal(reader.scroll().props.scrollPosition.value,before);
+ reader.show();reader.flush(4000);assert(!reader.button('返回'));
+ assert.equal(reader.scroll().props.scrollPosition.value,before);
+ reader.change('2:2_1');await settle();assert.equal(reader.images().length,6);
+ assert.equal(reader.scroll().props.scrollPosition.value,'2:2_1');
+ reader.images()[5].props.onLoaded();await settle();
+ assert.equal(reader.scroll().props.scrollPosition.value,'2:2_1');
+ reader.change('3:3_0');reader.images()[4].props.onLoaded();reader.show();
+ reader.button('返回').props.action();reader.button('返回').props.action();assert.equal(reader.dismissals,1);
+ assert.equal(reader.snapshots.at(-1).chapterId,'3');assert.equal(reader.saved.at(-1)[1],0);
+ assert(!reader.timers.some(t=>t.delay===100||t.delay===300));
+ console.log('PASS native position tracking, stable scroll identity, off-screen callbacks cannot append or overwrite progress, same-chapter directory is a no-op');
+ console.log('PASS auto append retains current last page; next chapter begins at its first page; controls never reposition; one reader dismissal');
+
+ const earlyClose=fixture(1);await settle();assert.equal(earlyClose.scroll().props.scrollPosition.value,'1:1_1');
+ earlyClose.show();earlyClose.button('返回').props.action();assert.equal(earlyClose.snapshots.length,0);
+ const restored=fixture(1);await settle();
+ restored.images()[1].props.onLoaded();restored.change('1:1_1');await settle();restored.flush(800);
+ assert.equal(restored.saved.at(-1)[1],1);assert.equal(restored.scroll().props.scrollPosition.value,'1:1_1');
+ restored.change('2:2_0');restored.images()[2].props.onLoaded();
+ restored.flush(100);restored.flush(300);
+ assert.equal(restored.scroll().props.scrollPosition.value,'2:2_0');
+ // Explicit selection starts a new, not-yet-appended chapter at its first page, with no delayed scroll retries.
+ const manual=fixture();await settle();manual.images()[0].props.onLoaded();
+ await manual.choose(chapters[0]);await settle();
+ assert.equal(manual.scroll().props.scrollPosition.value,'3:3_0');
+ manual.change('1:1_0');assert.equal(manual.scroll().props.scrollPosition.value,'3:3_0');
+ manual.images()[0].props.onLoaded();manual.change('3:3_0');manual.flush(800);
+ assert.equal(manual.snapshots.at(-1).chapterId,'3');assert.equal(manual.saved.at(-1)[1],0);
+ const short=fixture();await settle();short.images()[0].props.onLoaded();
+ short.scroll().props.onScrollTargetVisibilityChange.onChanged(['1:1_0','1:1_1']);await settle();assert.equal(short.images().length,2);
+ short.images()[1].props.onLoaded();await settle();
+ assert.equal(short.images().length,4);assert.equal(short.scroll().props.scrollPosition.value,'1:1_0');
+ short.images()[3].props.onLoaded();await settle();assert.equal(short.images().length,4);
+ console.log('PASS short chapters append from actual native end visibility, without chaining on stale lazy callbacks');
+ console.log('PASS one-shot restoration, no late timer snapback, unconfirmed close cannot erase saved progress, explicit chapter selection starts at page one');
 })().catch(error=>{console.error(error);process.exitCode=1});

@@ -1,6 +1,6 @@
 import {
-  Button, HStack, Image, LazyVStack, List, Navigation, NavigationStack, ProgressView,
-  ScrollView, ScrollViewReader, Section, Spacer, Text, VStack, ZStack, useEffect, useObservable, useRef,
+  Button, GeometryReader, HStack, LazyVStack, List, Navigation, NavigationStack, ProgressView,
+  ScrollView, Section, Spacer, Text, VStack, ZStack, useEffect, useObservable, useRef,
 } from "scripting"
 import { DeferredPageImage } from "./deferred-page-image"
 import { ChapterStream, ChapterSegment } from "./chapter-stream"
@@ -45,31 +45,22 @@ export function ComicReaderView(props: ReaderProps) {
   const busy = useObservable(false)
   const error = useObservable("")
   const historyWarning = useObservable("")
-  const revision = useObservable(0)
-  const visible = useRef(new Set<number>())
+  const initialIndex = useRef<number | null>(null)
+  if (initialIndex.current === null) {
+    const progress = getOnlineChapterProgress({ sourceId: props.onlineProgress.sourceId || "zh.jmcomic",
+      comicId: props.onlineProgress.comicId, chapterId: props.selectedChapter.id, chapterOrder: props.selectedChapter.order })
+    initialIndex.current = progress.lastPage > 0 && progress.lastPage < props.initialPages.length ? progress.lastPage : 0
+  }
+  const position = useObservable<string | null>(stream.pages[initialIndex.current]?.id ?? null)
   const loaded = useRef(new Set<string>())
-  const visibleTail = useRef("")
-  const currentPage = useRef(0)
+  const visibleTargets = useRef(new Set<string>())
+  const currentPage = useRef(initialIndex.current)
+  const confirmed = useRef<{ segment: ChapterSegment; page: number } | null>(null)
   const saveTimer = useRef<any>(null)
   const hideTimer = useRef<any>(null)
   const alive = useRef(true)
   const seenChapters = useRef(new Set<string>())
-  const proxy = useRef<any>(null)
-  const restored = useRef(false)
-  const jumpToken = useRef(0)
   const closing = useRef(false)
-  // This dismiss belongs to the one full-screen reader, never to a chapter.
-  const returnToDetails = (): void => {
-    if (closing.current) return
-    closing.current = true
-    alive.current = false
-    preloader.stop()
-    jumpToken.current += 1
-    if (saveTimer.current) clearTimeout(saveTimer.current)
-    if (hideTimer.current) clearTimeout(hideTimer.current)
-    snapshot(stream.segmentAt(currentPage.current), currentPage.current)
-    dismiss()
-  }
 
   const snapshot = (segment: ChapterSegment, globalPage: number): void => {
     const local = Math.max(0, Math.min(segment.count - 1, globalPage - segment.start))
@@ -81,21 +72,43 @@ export function ComicReaderView(props: ReaderProps) {
       progressText: local >= segment.count - 1 ? "已读完" : `读到 ${local + 1}/${segment.count}`, lastReadAt: timestamp })
     props.onProgressUpdate?.()
   }
-  const report = (): void => {
-    if (!alive.current || !visible.current.size) return
-    const page = Math.min(...visible.current)
-    const segment = stream.segmentAt(page)
+  const saveConfirmed = (): void => {
+    if (confirmed.current) snapshot(confirmed.current.segment, confirmed.current.page)
+  }
+  const returnToDetails = (): void => {
+    if (closing.current) return
+    closing.current = true; alive.current = false
+    preloader.stop()
+    if (saveTimer.current) clearTimeout(saveTimer.current)
+    if (hideTimer.current) clearTimeout(hideTimer.current)
+    saveConfirmed()
+    dismiss()
+  }
+  const report = (page: number): void => {
+    if (!alive.current || !stream.pages[page]) return
     currentPage.current = page
+    const segment = stream.segmentAt(page)
     preloader.update(stream, page)
     if (current.value.id !== segment.chapter.id) current.setValue(segment.chapter)
     if (saveTimer.current) clearTimeout(saveTimer.current)
-    saveTimer.current = setTimeout(() => snapshot(segment, page), 800)
+    // Lazy creation and background decoding never count as reading a page.
+    if (!loaded.current.has(stream.pages[page].id)) return
+    confirmed.current = { segment, page }
+    saveTimer.current = setTimeout(saveConfirmed, 800)
     if (!seenChapters.current.has(segment.chapter.id)) {
       seenChapters.current.add(segment.chapter.id)
       recordJMAccountReading(segment.chapter.id).catch(e => {
         if (alive.current) historyWarning.setValue(e instanceof Error ? e.message : "观看历史同步失败")
       })
     }
+    maybeAppend()
+  }
+  const onPositionChanged = (id: string | number | null): void => {
+    if (!alive.current || typeof id !== "string") return
+    const index = stream.pages.findIndex(page => page.id === id)
+    if (index < 0) return
+    if (position.value !== id) position.setValue(id)
+    report(index)
   }
   const armHide = (): void => {
     if (hideTimer.current) clearTimeout(hideTimer.current)
@@ -103,34 +116,54 @@ export function ComicReaderView(props: ReaderProps) {
   }
   const toggleControls = (): void => { controls.setValue(!controls.value); if (controls.value) armHide() }
   const jump = (index: number): void => {
-    const target = stream.pages[index]?.id
+    const target = stream.pages[index]
     if (!target) return
-    const token = ++jumpToken.current
+    if (saveTimer.current) clearTimeout(saveTimer.current)
+    confirmed.current = null
     currentPage.current = index
-    preloader.load(stream.pages[index]).catch(() => {})
+    current.setValue(stream.segmentAt(index).chapter)
+    preloader.load(target).catch(() => {})
     preloader.update(stream, index)
-    for (const delay of [100, 300]) setTimeout(() => {
-      if (alive.current && token === jumpToken.current) proxy.current?.scrollTo(target, "top")
-    }, delay)
+    // One native position binding owns both restoration and explicit navigation.
+    position.setValue(target.id)
   }
   const append = async (): Promise<void> => {
     if (!alive.current || busy.value || error.value) return
     const tail = stream.segments[stream.segments.length - 1].chapter
     if (!stream.adjacent(tail, 1)) return
     busy.setValue(true)
-    try { if (await stream.appendNext()) { if (alive.current) pages.setValue(stream.pages) } }
+    try {
+      if (await stream.appendNext()) {
+        if (alive.current) { visibleTargets.current.clear(); pages.setValue(stream.pages) }
+      }
+    }
     catch (e) { if (alive.current) error.setValue(e instanceof Error ? e.message : "下一章加载失败") }
     finally { if (alive.current) busy.setValue(false) }
   }
   const maybeAppend = (): void => {
     const last = stream.pages[stream.pages.length - 1]
-    if (last && visibleTail.current === last.id && loaded.current.has(last.id)) append().catch(() => {})
+    // Native target visibility also handles a short chapter that fits on screen.
+    // Lazy onAppear is deliberately never used to detect the chapter end.
+    const atEnd = last && (currentPage.current === last.index ||
+      visibleTargets.current.has(last.id))
+    if (last && atEnd && stream.segmentAt(currentPage.current).chapter.id === stream.segmentAt(last.index).chapter.id &&
+      loaded.current.has(last.id)) {
+      append().catch(() => {})
+    }
+  }
+  const onPageLoaded = (id: string): void => {
+    if (!alive.current || !stream.pages.some(page => page.id === id)) return
+    loaded.current.add(id)
+    if (position.value === id) {
+      report(currentPage.current)
+    }
+    maybeAppend()
   }
   const choose = async (chapter: OnlineChapter): Promise<void> => {
-    if (busy.value) return
+    if (busy.value || chapter.id === current.value.id) return
     preloader.cancel()
     if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null }
-    snapshot(stream.segmentAt(currentPage.current), currentPage.current)
+    saveConfirmed()
     controls.setValue(false); error.setValue("")
     const existing = stream.segments.find(segment => segment.chapter.id === chapter.id)
     if (existing) { jump(existing.start); return }
@@ -138,8 +171,9 @@ export function ComicReaderView(props: ReaderProps) {
     try {
       await stream.select(chapter)
       if (!alive.current) return
-      visible.current.clear(); loaded.current.clear(); visibleTail.current = ""; currentPage.current = 0
-      current.setValue(chapter); pages.setValue(stream.pages); revision.setValue(revision.value + 1)
+      loaded.current.clear()
+      visibleTargets.current.clear()
+      pages.setValue(stream.pages)
       jump(0)
     } catch (e) { if (alive.current) error.setValue(e instanceof Error ? e.message : "章节加载失败") }
     finally { if (alive.current) busy.setValue(false) }
@@ -150,49 +184,48 @@ export function ComicReaderView(props: ReaderProps) {
   }
   useEffect(() => {
     alive.current = true
+    preloader.load(stream.pages[currentPage.current]).catch(() => {})
+    preloader.update(stream, currentPage.current)
     return () => {
-      alive.current = false; jumpToken.current += 1
+      alive.current = false
       preloader.stop()
       if (saveTimer.current) clearTimeout(saveTimer.current)
       if (hideTimer.current) clearTimeout(hideTimer.current)
-      snapshot(stream.segmentAt(currentPage.current), currentPage.current)
+      if (!closing.current) saveConfirmed()
     }
   }, [])
   const previous = stream.adjacent(current.value, -1)
   const next = stream.adjacent(current.value, 1)
-  const last = pages.value[pages.value.length - 1]
 
   return <ZStack frame={{ maxWidth: "infinity", maxHeight: "infinity" }} background={{ style: "black", shape: "rect" }}
     statusBarHidden persistentSystemOverlays="hidden" toolbarVisibility="hidden">
-    <ScrollViewReader>{scrollProxy => {
-      proxy.current = scrollProxy
-      if (!restored.current) {
-        restored.current = true
-        const progress = getOnlineChapterProgress({ sourceId: props.onlineProgress.sourceId || "zh.jmcomic",
-          comicId: props.onlineProgress.comicId, chapterId: props.selectedChapter.id, chapterOrder: props.selectedChapter.order })
-        if (progress.lastPage > 0 && progress.lastPage < props.initialPages.length) jump(progress.lastPage)
-      }
-      return <ScrollView key={revision.value} background={{ style: "black", shape: "rect" }}
+    <GeometryReader key="reader-viewport" ignoresSafeArea={{ regions: "container", edges: "all" }}>{geometry =>
+      <ScrollView key="reader-scroll" background={{ style: "black", shape: "rect" }}
+        scrollPosition={{ value: position.value, onChanged: onPositionChanged, anchor: "top" }}
+        onScrollTargetVisibilityChange={{ idType: "string", threshold: 0, onChanged: ids => {
+          if (!alive.current) return
+          visibleTargets.current = new Set(ids.filter((id): id is string => typeof id === "string"))
+          maybeAppend()
+        } }}
         ignoresSafeArea={{ regions: "container", edges: "all" }} frame={{ maxWidth: "infinity", maxHeight: "infinity" }}>
-        <LazyVStack spacing={0}>
+        <LazyVStack key="reader-pages" spacing={0} scrollTargetLayout>
           {pages.value.map(item => <DeferredPageImage key={item.id}
-            item={{ ...item, loadLocalFile: item.loadLocalFile || (item.path ? async () => item.path! : undefined) }}
-            loadPage={() => preloader.load(item)}
+            item={item} cachedPath={preloader.cachedPath(item)}
+            loadPage={() => preloader.load(item)} viewport={geometry.size}
             frame={{ maxWidth: "infinity" }} onTapGesture={toggleControls}
-            onAppear={() => { visible.current.add(item.index); report() }}
-            onDisappear={() => { visible.current.delete(item.index); report() }}
-            onLoaded={() => { loaded.current.add(item.id); maybeAppend() }} />)}
-          <VStack key={`end:${last?.id}`} spacing={0} frame={{ height: busy.value ? 36 : error.value ? 88 : 1, maxWidth: "infinity" }}
-            onAppear={() => { visibleTail.current = last?.id || ""; maybeAppend() }}
-            onDisappear={() => { if (visibleTail.current === last?.id) visibleTail.current = "" }}>
-            {busy.value ? <ProgressView /> : null}
-            {error.value ? <VStack spacing={8}><Text foregroundStyle="white" font="caption">{error.value}</Text>
-              <Button title="重试加载下一章" action={() => { error.setValue(""); append().catch(() => {}) }} /></VStack> : null}
-          </VStack>
+            onLoaded={() => onPageLoaded(item.id)} />)}
         </LazyVStack>
       </ScrollView>
-    }}</ScrollViewReader>
-    {controls.value ? <VStack frame={{ maxWidth: "infinity", maxHeight: "infinity" }} padding={{ horizontal: 16, top: 12, bottom: 16 }}>
+    }</GeometryReader>
+    {busy.value || error.value ? <VStack key="reader-status" frame={{ maxWidth: "infinity", maxHeight: "infinity" }}>
+      <Spacer />
+      <VStack spacing={8} padding={12} background={{ style: "rgba(25,25,25,0.94)", shape: { type: "rect", cornerRadius: 12 } }}>
+        {busy.value ? <ProgressView /> : null}
+        {error.value ? <VStack spacing={8}><Text foregroundStyle="white" font="caption">{error.value}</Text>
+          <Button title="重试加载下一章" action={() => { error.setValue(""); maybeAppend() }} /></VStack> : null}
+      </VStack>
+    </VStack> : null}
+    {controls.value ? <VStack key="reader-controls" frame={{ maxWidth: "infinity", maxHeight: "infinity" }} padding={{ horizontal: 16, top: 12, bottom: 16 }}>
       <HStack spacing={12} padding={16} background={{ style: "rgba(25,25,25,0.94)", shape: { type: "rect", cornerRadius: 22 } }}>
         <Button title="返回" systemImage="chevron.left" action={returnToDetails} />
         <VStack alignment="leading" spacing={4} frame={{ maxWidth: "infinity" }}>
