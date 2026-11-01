@@ -53,6 +53,18 @@ export function ComicReaderView(props: ReaderProps) {
   const proxy = useRef<any>(null)
   const restored = useRef(false)
   const jumpToken = useRef(0)
+  const closing = useRef(false)
+  // This dismiss belongs to the one full-screen reader, never to a chapter.
+  const returnToDetails = (): void => {
+    if (closing.current) return
+    closing.current = true
+    alive.current = false
+    jumpToken.current += 1
+    if (saveTimer.current) clearTimeout(saveTimer.current)
+    if (hideTimer.current) clearTimeout(hideTimer.current)
+    snapshot(stream.segmentAt(currentPage.current), currentPage.current)
+    dismiss()
+  }
 
   const snapshot = (segment: ChapterSegment, globalPage: number): void => {
     const local = Math.max(0, Math.min(segment.count - 1, globalPage - segment.start))
@@ -65,7 +77,7 @@ export function ComicReaderView(props: ReaderProps) {
     props.onProgressUpdate?.()
   }
   const report = (): void => {
-    if (!visible.current.size) return
+    if (!alive.current || !visible.current.size) return
     const page = Math.min(...visible.current)
     const segment = stream.segmentAt(page)
     currentPage.current = page
@@ -94,7 +106,7 @@ export function ComicReaderView(props: ReaderProps) {
     }, delay)
   }
   const append = async (): Promise<void> => {
-    if (busy.value || error.value) return
+    if (!alive.current || busy.value || error.value) return
     const tail = stream.segments[stream.segments.length - 1].chapter
     if (!stream.adjacent(tail, 1)) return
     busy.setValue(true)
@@ -141,7 +153,7 @@ export function ComicReaderView(props: ReaderProps) {
   const last = pages.value[pages.value.length - 1]
 
   return <ZStack frame={{ maxWidth: "infinity", maxHeight: "infinity" }} background={{ style: "black", shape: "rect" }}
-    ignoresSafeArea={{ regions: "container", edges: "all" }} statusBarHidden persistentSystemOverlays="hidden" toolbarVisibility="hidden">
+    statusBarHidden persistentSystemOverlays="hidden" toolbarVisibility="hidden">
     <ScrollViewReader>{scrollProxy => {
       proxy.current = scrollProxy
       if (!restored.current) {
@@ -169,7 +181,14 @@ export function ComicReaderView(props: ReaderProps) {
         </LazyVStack>
       </ScrollView>
     }}</ScrollViewReader>
-    {controls.value ? <VStack frame={{ maxWidth: "infinity", maxHeight: "infinity" }} padding={{ horizontal: 16, bottom: 32 }}>
+    {controls.value ? <VStack frame={{ maxWidth: "infinity", maxHeight: "infinity" }} padding={{ horizontal: 16, top: 12, bottom: 16 }}>
+      <HStack spacing={12} padding={16} background={{ style: "rgba(25,25,25,0.94)", shape: { type: "rect", cornerRadius: 22 } }}>
+        <Button title="返回" systemImage="chevron.left" action={returnToDetails} />
+        <VStack alignment="leading" spacing={4} frame={{ maxWidth: "infinity" }}>
+          <Text font="caption" foregroundStyle="gray">{`第 ${current.value.order} 章`}</Text>
+          <Text font="headline" foregroundStyle="white" lineLimit={2}>{current.value.title}</Text>
+        </VStack>
+      </HStack>
       <Spacer />
       <VStack spacing={14} padding={18} background={{ style: "rgba(25,25,25,0.94)", shape: { type: "rect", cornerRadius: 22 } }}>
         <HStack spacing={20} frame={{ maxWidth: "infinity" }}>
@@ -178,7 +197,6 @@ export function ComicReaderView(props: ReaderProps) {
           <Button title="下一章" systemImage="forward.end" disabled={busy.value || !next} action={() => { if (next) choose(next).catch(() => {}) }} />
         </HStack>
         {historyWarning.value ? <Text font="caption" foregroundStyle="gray">{historyWarning.value}</Text> : null}
-        <Button title="退出阅读" foregroundStyle="gray" action={dismiss} />
       </VStack>
     </VStack> : null}
   </ZStack>

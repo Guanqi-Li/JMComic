@@ -218,6 +218,8 @@ export function OnlineComicDetailView(props: {
   }
 
   const openChapter = async (chapter: OnlineChapter): Promise<void> => {
+    // A single reader presentation owns every chapter until it returns here.
+    if (chapterLoading.value) return
     chapterLoading.setValue(chapter.id)
     try {
       const images = await onlineAdapter.getPageList(props.auth, props.comicId, chapter)
