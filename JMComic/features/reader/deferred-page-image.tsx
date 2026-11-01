@@ -8,6 +8,7 @@ export function DeferredPageImage(props: {
   onAppear?: () => void
   onDisappear?: () => void
   onTapGesture?: () => void
+  onLoaded?: () => void
 }) {
   const path = useObservable("")
   const busy = useObservable(false)
@@ -20,11 +21,14 @@ export function DeferredPageImage(props: {
     try {
       const value = await withPageLoadSlot(props.item.loadLocalFile)
       if (!value) throw new Error("图片数据为空")
-      if (mounted.current) path.setValue(value)
+      if (mounted.current) {
+        path.setValue(value)
+        setTimeout(() => { if (mounted.current) props.onLoaded?.() }, 180)
+      }
     } catch (e) { if (mounted.current) error.setValue(e instanceof Error ? e.message : "图片加载失败") }
     finally { if (mounted.current) busy.setValue(false) }
   }
-  return <VStack spacing={10} frame={{ ...props.frame, minHeight: path.value ? 0 : 180 }}
+  return <VStack spacing={0} frame={{ ...props.frame, minHeight: path.value ? 0 : 180 }}
     onAppear={() => { props.onAppear?.(); load().catch(() => {}) }} onDisappear={props.onDisappear} onTapGesture={props.onTapGesture}>
     {path.value ? <Image filePath={path.value} resizable aspectRatio={{ value: null, contentMode: "fit" }} frame={props.frame}
       onError={() => { path.setValue(""); error.setValue("图片无法显示") }} />

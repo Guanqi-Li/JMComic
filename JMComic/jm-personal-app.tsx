@@ -177,8 +177,10 @@ export function JMPersonalApp(props: { adapter: ComicSourceAdapter; onOpen: (com
     <Button title="更多" buttonStyle="plain" disabled={shelfBusy.value || !loggedIn.value} action={() => { openMore(kind).catch(e => { shelfError.setValue(String(e)) }) }} />
   </HStack>
 
-  return <NavigationStack>
-    <TabView selection={tab} tint="systemPink" preferredColorScheme={appearance.value === "auto" ? undefined : appearance.value} toolbar={toolbar}>
+  return <NavigationStack preferredColorScheme={appearance.value === "auto" ? undefined : appearance.value} background={{ style: "systemGroupedBackground", shape: "rect" }}
+    toolbarBackground={{ style: "systemGroupedBackground", bars: ["navigationBar"] }}
+    toolbarBackgroundVisibility={{ visibility: "visible", bars: ["navigationBar"] }}>
+    <TabView selection={tab} tint="systemPink" toolbar={toolbar}>
       <Tab title="书架" systemImage="books.vertical" value="library">
         <List navigationTitle="书架" listStyle="insetGroup">
           {!loadJMAccount().username ? <Section><Button title="登录 JMComic" systemImage="person.crop.circle" action={() => tab.setValue("settings")} /></Section> : null}
@@ -196,7 +198,8 @@ export function JMPersonalApp(props: { adapter: ComicSourceAdapter; onOpen: (com
         </List>
       </Tab>
       <Tab title="搜索" systemImage="magnifyingglass" value="search">
-        <VStack spacing={0} navigationTitle="搜索" navigationBarTitleDisplayMode="inline" background={{ style: "systemGroupedBackground", shape: "rect" }}>
+        <VStack spacing={0} navigationTitle="搜索" navigationBarTitleDisplayMode="inline" background={{ style: "systemGroupedBackground", shape: "rect" }}
+          toolbarBackground={{ style: "systemGroupedBackground", bars: ["navigationBar"] }} toolbarBackgroundVisibility="visible">
           <VStack padding={{ horizontal: 20, top: 18, bottom: 14 }}>
             <HStack spacing={12} padding={{ horizontal: 18, vertical: 15 }}
               background={{ style: "secondarySystemGroupedBackground", shape: { type: "rect", cornerRadius: 26, style: "continuous" } }}
@@ -212,7 +215,7 @@ export function JMPersonalApp(props: { adapter: ComicSourceAdapter; onOpen: (com
               <Button disabled={searchBusy.value} action={() => { search().catch(() => {}) }}><Image systemName="magnifyingglass" foregroundStyle="systemPink" /></Button>
             </HStack>
           </VStack>
-          <List listStyle="insetGroup">
+          <List listStyle="insetGroup" scrollContentBackground="hidden" background={{ style: "systemGroupedBackground", shape: "rect" }}>
             {!submittedKeyword.value ? <Section title="首页推荐">
               {homeBusy.value ? <ProgressView /> : null}
               {homeError.value ? <VStack><Text foregroundStyle="secondaryLabel">{homeError.value}</Text><Button title="重试" action={() => { loadHome().catch(() => {}) }} /></VStack> : null}

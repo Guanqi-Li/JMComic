@@ -57,6 +57,9 @@ export function OnlineComicDetailView(props: {
     onlineProgress: any
     onProgressUpdate?: () => void
     initialPages: PageItem[]
+    chapters: OnlineChapter[]
+    selectedChapter: OnlineChapter
+    loadChapterPages: (chapter: OnlineChapter) => Promise<PageItem[]>
   }) => any
   renderSearchResultsView: (params: {
     auth: OnlineAuth
@@ -263,21 +266,16 @@ export function OnlineComicDetailView(props: {
         },
         onProgressUpdate: props.onReadingUpdate,
         initialPages,
+        chapters: chapters.value,
+        selectedChapter: chapter,
+        loadChapterPages: async next => {
+          const images = await onlineAdapter.getPageList(props.auth, props.comicId, next)
+          return images.map((item, index) => ({ id: String(item.id ?? index), index,
+            loadLocalFile: item.loadLocalFile, path: item.localFilePath,
+            imageUrl: item.loadLocalFile || item.localFilePath ? undefined : props.normalizeOnlineThumbUrl(item.media, props.auth.host),
+          }))
+        },
       }))
-      const progress = props.getOnlineChapterProgress(progressIdentity)
-      props.pushOnlineReadingHistory({
-        comicId: props.comicId,
-        comicTitle: title,
-        comicAuthor: detail.value?.author ?? "",
-        comicCover: detail.value?.thumb ?? { fileServer: "", path: "" },
-        sourceId: onlineAdapter.descriptor().id,
-        chapterId: chapter.id,
-        chapterTitle: chapter.title,
-        chapterOrder: chapter.order,
-        progressText: props.getOnlineChapterProgressLabel(progressIdentity, chapter),
-        lastReadAt: progress.lastReadAt || Date.now(),
-        host: props.auth.host,
-      })
       chapters.setValue([...chapters.value])
       props.onReadingUpdate?.()
     } catch (error) {
