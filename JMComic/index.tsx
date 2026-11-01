@@ -33,7 +33,7 @@ const baseAdapter = createJMComicAdapter(seedBuiltinSources()[0], {
   ensureContext: ensureJMApiContext, apiGet: jmApiGet, albumPath: jmAlbumPath, chapterPath: jmChapterPath,
   searchPath: jmSearchPath, filterPath: jmFilterPath, resolveAbsoluteUrl: jmResolveAbsoluteUrl, coverUrl: jmCoverUrl,
   buildAbsoluteOnlineThumb: (url, originalName) => ({ fileServer: "", path: url || "", originalName }),
-  fetchPageToLocalFile: (url, namespace, cacheName, sourceName, episodeId) => jmFetchPageToLocalFile(url, namespace, cacheName, sourceName, episodeId, { getOnlineImageCachePath }),
+  fetchPageToLocalFile: (url, namespace, cacheName, sourceName, episodeId, reload) => jmFetchPageToLocalFile(url, namespace, cacheName, sourceName, episodeId, { getOnlineImageCachePath }, reload),
 })
 
 const adapter: ComicSourceAdapter = {
@@ -47,7 +47,7 @@ const adapter: ComicSourceAdapter = {
     }
   },
   getMangaDetails: (a, id) => baseAdapter.getMangaDetails(a, id),
-  getFavouriteState: async id => loadJMAccount().username ? (await readJMWebAlbum(id)).favourite : false,
+  getFavouriteState: async id => loadJMAccount().username ? (await readJMWebAlbum(id, false)).favourite : false,
   getPageList: (a, id, chapter) => baseAdapter.getPageList(a, id, chapter),
   toggleFavourite: (_a, id) => toggleJMAccountFavourite(id),
 }
@@ -60,6 +60,7 @@ function RelatedSearch(props: { keyword: string; onUpdate: () => void }) {
   const comics = useObservable<OnlineComic[]>([]), busy = useObservable(true), error = useObservable("")
   useEffect(() => {
     let active = true
+    busy.setValue(true); error.setValue(""); comics.setValue([])
     adapter.getMangaList(auth, { keyword: props.keyword, page: 1, sort: "dd" })
       .then(result => { if (active) comics.setValue(result.docs) })
       .catch(e => { if (active) error.setValue(e instanceof Error ? e.message : "加载失败") })

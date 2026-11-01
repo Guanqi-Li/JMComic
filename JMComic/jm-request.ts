@@ -236,7 +236,7 @@ const jmFetchDomainCandidates = async (): Promise<string[]> => {
       const text = (await response.text()).trim().replace(/^\uFEFF/, "")
       const bytes = jmDecodeEncryptedBase64(text, JM_DOMAIN_REFRESH_SECRET)
       const payload = JSON.parse(jmExtractJsonText(bytes)) as JMDomainRefreshResp
-      const domains = Array.from(new Set([...(payload.Server ?? []), ...(payload.server ?? [])].map(jmNormalizeDomain).filter(Boolean)))
+      const domains = Array.from(new Set([...(Array.isArray(payload.Server) ? payload.Server : []), ...(Array.isArray(payload.server) ? payload.server : [])].filter((value): value is string => typeof value === "string").map(jmNormalizeDomain).filter(domain => /^[a-z0-9.-]+(?::\d+)?$/i.test(domain))))
       if (domains.length > 0) return domains
     } catch {
       continue
@@ -246,14 +246,19 @@ const jmFetchDomainCandidates = async (): Promise<string[]> => {
 }
 
 export const jmApiGet = async <T,>(domain: string, path: string, bearerToken?: string, ts?: number): Promise<T> => {
-  const currentTs = ts ?? jmCurrentTs()
-  const response = await fetch(`https://${domain}${path}`, { headers: jmRequestHeaders(currentTs, bearerToken), timeout: 20 })
-  if (!response.ok) throw new Error(`JM 请求失败 (${response.status})`)
-  const outer = await response.json() as { data?: string }
-  const encrypted = String(outer?.data ?? "")
-  if (!encrypted) throw new Error("JM 响应数据为空")
-  const bytes = jmDecodeEncryptedBase64(encrypted, `${currentTs}${JM_DATA_SECRET}`)
-  return JSON.parse(jmExtractJsonText(bytes)) as T
+  try {
+    const currentTs = ts ?? jmCurrentTs()
+    const response = await fetch(`https://${domain}${path}`, { headers: jmRequestHeaders(currentTs, bearerToken), timeout: 20 })
+    if (!response.ok) throw new Error(`JM 请求失败 (${response.status})`)
+    const outer = await response.json() as { data?: string }
+    const encrypted = String(outer?.data ?? "")
+    if (!encrypted) throw new Error("JM 响应数据为空")
+    const bytes = jmDecodeEncryptedBase64(encrypted, `${currentTs}${JM_DATA_SECRET}`)
+    return JSON.parse(jmExtractJsonText(bytes)) as T
+  } catch (error) {
+    if (jmApiContextCache?.value.domain === domain) jmApiContextCache = null
+    throw error
+  }
 }
 
 let contextTask: Promise<JMApiContext> | undefined
@@ -266,7 +271,7 @@ const resolveJMApiContext = async (): Promise<JMApiContext> => {
       try {
         const setting = await jmApiGet<JMSettingResp>(domain, `/setting?app_img_shunt=${shunt}&express=`)
         const cdnBase = jmNormalizeCdnBase(String(setting?.img_host ?? ""))
-        if (cdnBase.startsWith("http")) {
+        if (/^https?:\/\/[^/\s?#]+(?:\/[^\s]*)?$/i.test(cdnBase)) {
           const value = { domain, cdnBase }
           jmApiContextCache = { value, updatedAt: Date.now() }
           return value

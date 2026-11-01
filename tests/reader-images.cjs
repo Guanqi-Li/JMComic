@@ -4,7 +4,7 @@ const file = path.resolve(__dirname, '../JMComic/features/reader/deferred-page-i
 const js = ts.transpileModule(fs.readFileSync(file, 'utf8'), {
   fileName: file, compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.React },
 }).outputText;
-function fixture({ cachedPath, loadPage }) {
+function fixture({ cachedPath, loadPage, exists = () => true }) {
   const slots = [], effects = [], timers = [], cleanups = [];
   let cursor = 0, notifications = 0, measurements = 0;
   const native = new Proxy({
@@ -13,8 +13,9 @@ function fixture({ cachedPath, loadPage }) {
     useEffect: fn => { const i = cursor++; if (!slots[i]) { slots[i] = true; effects.push(fn); } },
   }, { get: (obj, key) => key in obj ? obj[key] : String(key) });
   const context = {
+    FileManager: { existsSync: exists },
     UIImage: { fromFile: () => { measurements++; return { width: 1000, height: 2000 }; } },
-    setTimeout: fn => { timers.push(fn); },
+    setTimeout: fn => { timers.push(fn); return timers.length; }, clearTimeout: id => { timers[id - 1] = null; },
     React: { createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity) }) },
   };
   const module = { exports: {} };
@@ -24,7 +25,7 @@ function fixture({ cachedPath, loadPage }) {
     viewport: { width: 390, height: 844 }, cachedPath, loadPage, onLoaded: () => { notifications++; } };
   const render = () => { cursor = 0; return module.exports.DeferredPageImage(props); };
   render(); for (const effect of effects.splice(0)) cleanups.push(effect());
-  return { render, props, flush: () => { for (const timer of timers.splice(0)) timer(); },
+  return { render, props, flush: () => { for (const timer of timers.splice(0)) if (timer) timer(); },
     close: () => { for (const cleanup of cleanups) cleanup(); },
     get notifications() { return notifications; }, get measurements() { return measurements; } };
 }
@@ -61,5 +62,13 @@ const settle = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(
   const closed = fixture({ loadPage: () => new Promise(resolve => { release = resolve; }) });
   closed.render().props.onAppear(); closed.close(); release('/late.png'); await settle(); closed.flush();
   assert.equal(closed.notifications, 0);
-  console.log('PASS failed image retries and unmounted image cannot emit late ready callbacks');
+  let invalidated = 0;
+  const broken = fixture({ cachedPath: '/broken.png', loadPage: async () => '/repaired.png' });
+  broken.props.onInvalidate = () => { invalidated++; };
+  broken.render().props.onAppear(); broken.render().children[0].props.onError(); broken.flush();
+  assert.equal(invalidated, 1); assert.equal(broken.notifications, 0);
+  const evicted = fixture({ cachedPath: '/evicted.png', exists: path => path !== '/evicted.png', loadPage: async () => '/restored.png' });
+  evicted.render().props.onAppear(); await settle(); evicted.flush();
+  assert.equal(evicted.render().children[0].props.filePath, '/restored.png'); assert.equal(evicted.notifications, 1);
+  console.log('PASS failed image retries, bad cache invalidation, cancelled ready callbacks and unmounted images cannot report false progress');
 })().catch(error => { console.error(error); process.exitCode = 1; });

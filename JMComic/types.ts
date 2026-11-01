@@ -99,7 +99,7 @@ export type PageItem = {
   imageUrl?: string
   fallbackImageUrls?: string[]
   index: number
-  loadLocalFile?: () => Promise<string>
+  loadLocalFile?: (reload?: boolean) => Promise<string>
 }
 export type ProgressData = { lastPage: number; totalPages: number; lastReadAt: number }
 export type ComicMeta = { favorite?: boolean; note?: string; tags?: string[] }
@@ -156,7 +156,7 @@ export type OnlineComicDetails = OnlineComic & {
   totalViews: number; updatedAt: string; createdAt: string; allowDownload: boolean
   allowComment: boolean; isFavourite: boolean; isLiked: boolean
 }
-export type OnlinePageImage = { id: string; media: OnlineThumb; localFilePath?: string; loadLocalFile?: () => Promise<string> }
+export type OnlinePageImage = { id: string; media: OnlineThumb; localFilePath?: string; loadLocalFile?: (reload?: boolean) => Promise<string> }
 export type OnlineUserProfile = {
   id: string
   name: string

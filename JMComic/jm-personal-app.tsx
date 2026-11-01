@@ -23,28 +23,33 @@ export function JMComicRows(props: { comics: OnlineComic[]; onOpen: (comic: Onli
   </VStack>
 }
 
-function JMAccountListPage(props: { kind: AccountListKind; initial: AccountPage; onOpen: (comic: OnlineComic) => void }) {
+export function JMAccountListPage(props: { kind: AccountListKind; initial: AccountPage; onOpen: (comic: OnlineComic) => void }) {
   const result = useObservable(props.initial)
   const busy = useObservable(false)
   const error = useObservable("")
   const paths = useRef<string[]>([""])
+  const retryPage = useRef(props.initial.page)
+  const active = useRef(true)
   const dismiss = Navigation.useDismiss()
   const load = async (page: number): Promise<void> => {
-    if (busy.value) return
+    if (!active.current || busy.value) return
+    retryPage.current = page
     busy.setValue(true); error.setValue("")
     try {
       const path = page === 1 ? undefined : paths.current[page - 1]
       if (page > 1 && !path) throw new Error("没有下一页")
       const next = await fetchJMAccountPage(props.kind, path, page)
+      if (!active.current) return
       result.setValue(next)
+      paths.current = paths.current.slice(0, page)
       if (next.nextPath) paths.current[page] = next.nextPath
-    } catch (e) { error.setValue(e instanceof Error ? e.message : "加载失败") }
-    finally { busy.setValue(false) }
+    } catch (e) { if (active.current) error.setValue(e instanceof Error ? e.message : "加载失败") }
+    finally { if (active.current) busy.setValue(false) }
   }
-  useEffect(() => { if (props.initial.nextPath) paths.current[1] = props.initial.nextPath }, [])
+  useEffect(() => { active.current = true; if (props.initial.nextPath) paths.current[1] = props.initial.nextPath; return () => { active.current = false } }, [])
   return <List navigationTitle={props.kind === "albums" ? "收藏" : "观看历史"} listStyle="insetGroup"
     toolbar={{ cancellationAction: <Button title="关闭" action={dismiss} /> }}>
-    {error.value ? <Section><Text foregroundStyle="red">{error.value}</Text><Button title="重试" action={() => { load(result.value.page).catch(() => {}) }} /></Section> : null}
+    {error.value ? <Section><Text foregroundStyle="red">{error.value}</Text><Button title="重试" action={() => { load(retryPage.current).catch(() => {}) }} /></Section> : null}
     <Section>
       {busy.value ? <ProgressView /> : null}
       <JMComicRows comics={result.value.docs} onOpen={props.onOpen} />
@@ -86,32 +91,49 @@ export function JMPersonalApp(props: { adapter: ComicSourceAdapter; onOpen: (com
   const searchError = useObservable("")
   const appearance = useObservable<AppearanceMode>(() => loadAppearanceMode())
   const searchGeneration = useRef(0)
+  const retrySearchPage = useRef(1)
+  const active = useRef(true)
+  const refreshPending = useRef(false)
+  const openingComic = useRef(false)
   const lastShelfRefresh = useRef(0)
   const home = useObservable<OnlineComic[]>([])
   const homeBusy = useObservable(false)
   const homeError = useObservable("")
   const loadHome = async (): Promise<void> => {
-    if (homeBusy.value || !props.adapter.getHomeRecommendations) return
+    if (!active.current || homeBusy.value || !props.adapter.getHomeRecommendations) return
     homeBusy.setValue(true); homeError.setValue("")
-    try { home.setValue(await props.adapter.getHomeRecommendations()) }
-    catch (error) { homeError.setValue(error instanceof Error ? error.message : "推荐加载失败") }
-    finally { homeBusy.setValue(false) }
+    try { const docs = await props.adapter.getHomeRecommendations(); if (active.current) home.setValue(docs) }
+    catch (error) { if (active.current) homeError.setValue(error instanceof Error ? error.message : "推荐加载失败") }
+    finally { if (active.current) homeBusy.setValue(false) }
   }
 
   const refresh = async (force = false): Promise<void> => {
-    if (shelfBusy.value || !loadJMAccount().username || (!force && Date.now() - lastShelfRefresh.current < 30000)) return
+    if (!active.current || !loadJMAccount().username) return
+    if (shelfBusy.value) { if (force) refreshPending.current = true; return }
+    if (!force && Date.now() - lastShelfRefresh.current < 30000) return
     shelfBusy.setValue(true); shelfError.setValue("")
     try {
-      favourites.setValue(await fetchJMAccountPage("albums"))
-      loggedIn.setValue(true)
-      history.setValue(await fetchJMAccountPage("watchlist"))
+      const albums = await fetchJMAccountPage("albums")
+      if (!active.current) return
+      favourites.setValue(albums); loggedIn.setValue(true)
+      const watchlist = await fetchJMAccountPage("watchlist")
+      if (!active.current) return
+      history.setValue(watchlist)
       lastShelfRefresh.current = Date.now()
-    } catch (e) { shelfError.setValue(e instanceof Error ? e.message : "书架加载失败") }
-    finally { shelfBusy.setValue(false) }
+    } catch (e) { if (active.current) shelfError.setValue(e instanceof Error ? e.message : "书架加载失败") }
+    finally {
+      if (active.current) {
+        shelfBusy.setValue(false)
+        if (refreshPending.current) { refreshPending.current = false; refresh(true).catch(() => {}) }
+      }
+    }
   }
   const onUpdate = (): void => { refresh(true).catch(() => {}) }
   const openComic = (comic: OnlineComic): void => {
-    props.onOpen(comic, onUpdate).then(onUpdate).catch(e => { Dialog.alert({ title: "打开失败", message: String(e instanceof Error ? e.message : e) }).catch(() => {}) })
+    if (!active.current || openingComic.current) return
+    openingComic.current = true
+    props.onOpen(comic, onUpdate).then(onUpdate).catch(e => { if (active.current) Dialog.alert({ title: "打开失败", message: String(e instanceof Error ? e.message : e) }).catch(() => {}) })
+      .finally(() => { openingComic.current = false })
   }
   const openMore = async (kind: AccountListKind): Promise<void> => {
     const initial = kind === "albums" ? favourites.value : history.value
@@ -122,29 +144,36 @@ export function JMPersonalApp(props: { adapter: ComicSourceAdapter; onOpen: (com
     if (loginBusy.value || shelfBusy.value) return
     loginBusy.setValue(true); loginError.setValue("")
     try {
-      const changed = loadJMAccount().username !== username.value.trim()
+      const changed = loadJMAccount().username !== username.value.trim() || loadJMAccount().password !== password.value
       lastShelfRefresh.current = 0
       saveJMCredentials(username.value, password.value)
-      if (changed) { favourites.setValue({ docs: [], page: 1 }); history.setValue({ docs: [], page: 1 }) }
+      if (changed) { favourites.setValue({ docs: [], page: 1 }); history.setValue({ docs: [], page: 1 }); home.setValue([]) }
       loggedIn.setValue(false)
       await loginJMAccount()
+      if (!active.current) return
       loggedIn.setValue(true)
       await refresh(true)
-    } catch (e) { loginError.setValue(e instanceof Error ? e.message : "登录失败") }
-    finally { loginBusy.setValue(false) }
+    } catch (e) { if (active.current) loginError.setValue(e instanceof Error ? e.message : "登录失败") }
+    finally { if (active.current) loginBusy.setValue(false) }
   }
   const browserLogin = async (): Promise<void> => {
     if (loginBusy.value || shelfBusy.value) return
     loginBusy.setValue(true); loginError.setValue("")
     try {
+      const changed = loadJMAccount().username !== username.value.trim() || loadJMAccount().password !== password.value
       saveJMCredentials(username.value, password.value)
+      lastShelfRefresh.current = 0; loggedIn.setValue(false)
+      if (changed) { favourites.setValue({ docs: [], page: 1 }); history.setValue({ docs: [], page: 1 }); home.setValue([]) }
       await openJMAccountBrowser()
       await refresh(true)
-    } catch (e) { loginError.setValue(e instanceof Error ? e.message : "网页验证失败") }
-    finally { loginBusy.setValue(false) }
+    } catch (e) { if (active.current) loginError.setValue(e instanceof Error ? e.message : "网页验证失败") }
+    finally { if (active.current) loginBusy.setValue(false) }
   }
   const search = async (targetPage = 1, newQuery = true): Promise<void> => {
+    if (!active.current) return
     const query = newQuery ? keyword.value.trim() : submittedKeyword.value
+    if (query && searchBusy.value && query === submittedKeyword.value) return
+    retrySearchPage.current = targetPage
     if (!query) {
       searchGeneration.current += 1; submittedKeyword.setValue(""); results.setValue([]); page.setValue(1); pages.setValue(1)
       searchBusy.setValue(false); searchError.setValue("")
@@ -159,14 +188,14 @@ export function JMPersonalApp(props: { adapter: ComicSourceAdapter; onOpen: (com
     results.setValue([])
     try {
       const result = await props.adapter.getMangaList(auth, { keyword: query || undefined, page: targetPage, sort: sort.value })
-      if (generation !== searchGeneration.current) return
+      if (!active.current || generation !== searchGeneration.current) return
       results.setValue(result.docs); page.setValue(result.page); pages.setValue(result.pages)
     } catch (e) {
-      if (generation === searchGeneration.current) searchError.setValue(e instanceof Error ? e.message : "搜索失败")
-    } finally { if (generation === searchGeneration.current) searchBusy.setValue(false) }
+      if (active.current && generation === searchGeneration.current) searchError.setValue(e instanceof Error ? e.message : "搜索失败")
+    } finally { if (active.current && generation === searchGeneration.current) searchBusy.setValue(false) }
   }
 
-  useEffect(() => { refresh().catch(() => {}) }, [])
+  useEffect(() => { active.current = true; refresh().catch(() => {}); return () => { active.current = false; searchGeneration.current += 1 } }, [])
   useEffect(() => { if (tab.value === "library") refresh().catch(() => {}) }, [tab.value])
   useEffect(() => { if (tab.value === "search" && !submittedKeyword.value && !home.value.length) loadHome().catch(() => {}) }, [tab.value])
   useEffect(() => { setActiveThemeScheme(appearance.value === "auto" ? null : appearance.value) }, [appearance.value])
@@ -174,7 +203,7 @@ export function JMPersonalApp(props: { adapter: ComicSourceAdapter; onOpen: (com
     primaryAction: Script.supportsMinimization() ? <Button title="最小化" systemImage="arrow.down.right.and.arrow.up.left" action={() => { Script.minimize().catch(() => {}) }} /> : undefined }
   const sectionHeader = (title: string, kind: AccountListKind) => <HStack>
     <Text font="headline">{title}</Text><Spacer />
-    <Button title="更多" buttonStyle="plain" disabled={shelfBusy.value || !loggedIn.value} action={() => { openMore(kind).catch(e => { shelfError.setValue(String(e)) }) }} />
+    <Button title="更多" buttonStyle="plain" disabled={shelfBusy.value || !loggedIn.value} action={() => { openMore(kind).catch(e => { if (active.current) shelfError.setValue(String(e)) }) }} />
   </HStack>
 
   return <NavigationStack preferredColorScheme={appearance.value === "auto" ? undefined : appearance.value} background={{ style: "systemGroupedBackground", shape: "rect" }}
@@ -224,7 +253,7 @@ export function JMPersonalApp(props: { adapter: ComicSourceAdapter; onOpen: (com
               <Section><Button title={`排序：${labels[sort.value]}`} systemImage="arrow.up.arrow.down" disabled={searchBusy.value} action={() => {
                 sort.setValue(sorts[(sorts.indexOf(sort.value) + 1) % sorts.length]); search(1, false).catch(() => {})
               }} /></Section>
-              {searchError.value ? <Section><Text foregroundStyle="red">{searchError.value}</Text><Button title="重试" action={() => { search(page.value, false).catch(() => {}) }} /></Section> : null}
+              {searchError.value ? <Section><Text foregroundStyle="red">{searchError.value}</Text><Button title="重试" action={() => { search(retrySearchPage.current, false).catch(() => {}) }} /></Section> : null}
               <Section>
                 {searchBusy.value ? <ProgressView /> : null}
                 <JMComicRows comics={results.value} onOpen={openComic} />

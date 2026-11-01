@@ -103,6 +103,14 @@ export function OnlineComicDetailView(props: {
   const actionBusy = useObservable<"" | "fav" | "like">("")
   const onlineAdapter = props.adapter
   const loadGeneration = useRef(0)
+  const active = useRef(true)
+  const actionVersion = useRef(0)
+  const closeDetail = (): void => {
+    if (!active.current) return
+    active.current = false; loadGeneration.current += 1
+    const close = props.onCloseSource ?? dismiss
+    close()
+  }
 
   const openTagSearch = async (keyword: string): Promise<void> => {
     const value = keyword.trim().replace(/^#/, "")
@@ -126,10 +134,13 @@ export function OnlineComicDetailView(props: {
   }
 
   const load = async (): Promise<void> => {
+    if (!active.current) return
+    const generation = ++loadGeneration.current
+    const version = actionVersion.current
+    chapterLoading.setValue(""); actionBusy.setValue("")
     loading.setValue(true)
     errorText.setValue("")
     try {
-      const generation = ++loadGeneration.current
       const [comic, chapterList] = await Promise.all([
         onlineAdapter.getMangaDetails(props.auth, props.comicId),
         onlineAdapter.getChapterList(props.auth, props.comicId),
@@ -143,19 +154,21 @@ export function OnlineComicDetailView(props: {
         .catch(() => {})
       onlineAdapter.getFavouriteState?.(props.comicId)
         .then(isFavourite => {
-          if (generation === loadGeneration.current && detail.value && !actionBusy.value) detail.setValue({ ...detail.value, isFavourite })
+          if (generation === loadGeneration.current && version === actionVersion.current && detail.value && !actionBusy.value) detail.setValue({ ...detail.value, isFavourite })
         }).catch(() => {})
     } catch (error) {
-      errorText.setValue(error instanceof Error ? error.message : "加载失败")
+      if (generation === loadGeneration.current) errorText.setValue(error instanceof Error ? error.message : "加载失败")
     } finally {
-      loading.setValue(false)
+      if (generation === loadGeneration.current) loading.setValue(false)
     }
   }
 
-  useEffect(() => { load().catch(() => {}); return () => { loadGeneration.current += 1 } }, [props.comicId])
+  useEffect(() => { active.current = true; load().catch(() => {}); return () => { active.current = false; loadGeneration.current += 1 } }, [props.comicId])
 
   const runComicAction = async (kind: "fav" | "like"): Promise<void> => {
-    if (!detail.value || actionBusy.value) return
+    if (!active.current || !detail.value || actionBusy.value) return
+    const generation = loadGeneration.current
+    actionVersion.current += 1
     const actionTask = kind === "fav" ? onlineAdapter.toggleFavourite : onlineAdapter.toggleLike
     if (!actionTask) {
       await props.dialog.alert({
@@ -168,6 +181,7 @@ export function OnlineComicDetailView(props: {
     try {
       const comic = detail.value
       const result = await actionTask(props.auth, props.comicId)
+      if (generation !== loadGeneration.current) return
       const action = String(result.action ?? "")
       const nextFavourite = kind === "fav"
         ? (action.includes("un_favourite") ? false : action.includes("favourite") ? true : !comic.isFavourite)
@@ -184,12 +198,13 @@ export function OnlineComicDetailView(props: {
       })
       props.onCollectionUpdate?.()
     } catch (error) {
+      if (generation !== loadGeneration.current) return
       await props.dialog.alert({
         title: kind === "fav" ? "收藏操作失败" : "喜欢操作失败",
         message: error instanceof Error ? error.message : "请稍后再试",
       })
     } finally {
-      actionBusy.setValue("")
+      if (generation === loadGeneration.current) actionBusy.setValue("")
     }
   }
 
@@ -219,7 +234,8 @@ export function OnlineComicDetailView(props: {
 
   const openChapter = async (chapter: OnlineChapter): Promise<void> => {
     // A single reader presentation owns every chapter until it returns here.
-    if (chapterLoading.value) return
+    if (!active.current || chapterLoading.value || actionBusy.value) return
+    const generation = loadGeneration.current
     chapterLoading.setValue(chapter.id)
     try {
       const images = await onlineAdapter.getPageList(props.auth, props.comicId, chapter)
@@ -244,6 +260,7 @@ export function OnlineComicDetailView(props: {
           }
           return { id: String(item.id ?? index), index, imageUrl }
         })
+      if (generation !== loadGeneration.current) return
       if (initialPages.length === 0) throw new Error("章节图片为空")
       const progressIdentity: OnlineProgressIdentity = {
         sourceId: onlineAdapter.descriptor().id,
@@ -278,15 +295,17 @@ export function OnlineComicDetailView(props: {
           }))
         },
       }))
+      if (generation !== loadGeneration.current) return
       chapters.setValue([...chapters.value])
       props.onReadingUpdate?.()
     } catch (error) {
+      if (generation !== loadGeneration.current) return
       await props.dialog.alert({
         title: "章节加载失败",
         message: error instanceof Error ? error.message : "无法获取章节图片",
       })
     } finally {
-      chapterLoading.setValue("")
+      if (generation === loadGeneration.current) chapterLoading.setValue("")
     }
   }
 
@@ -294,7 +313,7 @@ export function OnlineComicDetailView(props: {
     primaryAction: Script.supportsMinimization()
       ? <Button title="最小化" systemImage="arrow.down.right.and.arrow.up.left" action={() => { Script.minimize().catch(() => { /**/ }) }} />
       : undefined,
-    cancellationAction: <Button title="关闭来源" systemImage="xmark" action={props.onCloseSource ?? dismiss} />,
+    cancellationAction: <Button title="关闭来源" systemImage="xmark" action={closeDetail} />,
   }
 
   if (loading.value) {
@@ -326,7 +345,7 @@ export function OnlineComicDetailView(props: {
   if (!comic) return <VStack />
 
   const coverFrame = { width: 122, height: 174 }
-  const latestChapter = chapters.value[0] ?? null
+  const latestChapter = chapters.value.reduce<OnlineChapter | null>((latest, chapter) => !latest || chapter.order > latest.order ? chapter : latest, null)
   const firstChapter = chapters.value.reduce<OnlineChapter | null>(
     (first, chapter) => !first || chapter.order < first.order ? chapter : first,
     null,
@@ -378,7 +397,7 @@ export function OnlineComicDetailView(props: {
       onOpenRecommendations={() => { openDiscoveryResults(`相关推荐 · ${comic.title}`, recommendations.value, "基于当前作品的在线推荐结果").catch(() => { /**/ }) }}
       renderRecommendations={(items) => props.renderRecommendationList(items)}
       onMinimize={() => { Script.minimize().catch(() => { /**/ }) }}
-      onClose={props.onCloseSource ?? dismiss}
+      onClose={closeDetail}
       onReload={() => { load().catch(() => { /**/ }) }}
     />
   )

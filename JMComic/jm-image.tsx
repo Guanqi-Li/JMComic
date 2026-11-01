@@ -17,12 +17,9 @@ const jmUnscrambleImageToFile = async (imageData: Data, epId: number, sourceFile
     return targetPath
   }
   const scrambleNum = jmCalcScrambleNum(epId, sourceFileName)
-  if (scrambleNum <= 1) {
-    FileManager.writeAsDataSync(targetPath, imageData)
-    return targetPath
-  }
   const image = UIImage.fromData(imageData)
-  if (!image) {
+  if (!image) throw new Error("JM 图片解码失败，请重试")
+  if (scrambleNum <= 1) {
     FileManager.writeAsDataSync(targetPath, imageData)
     return targetPath
   }
@@ -30,10 +27,7 @@ const jmUnscrambleImageToFile = async (imageData: Data, epId: number, sourceFile
   const height = Math.max(1, image.height)
   const block = Math.floor(height / scrambleNum)
   const remainder = height % scrambleNum
-  if (block <= 0) {
-    FileManager.writeAsDataSync(targetPath, imageData)
-    return targetPath
-  }
+  if (block <= 0) throw new Error("JM 图片尺寸异常，请重试")
   const orderedSlices: UIImage[] = []
   for (let i = scrambleNum - 1; i >= 0; i -= 1) {
     const currentHeight = i === scrambleNum - 1 ? block + remainder : block
@@ -41,10 +35,7 @@ const jmUnscrambleImageToFile = async (imageData: Data, epId: number, sourceFile
       { width, height: currentHeight },
       { position: { x: 0, y: i * block }, size: { width, height: currentHeight } },
     )
-    if (!slice) {
-      FileManager.writeAsDataSync(targetPath, imageData)
-      return targetPath
-    }
+    if (!slice) throw new Error("JM 图片还原失败，请重试")
     orderedSlices.push(slice)
   }
   const pngData = await ImageRenderer.toPNGData(
@@ -67,11 +58,12 @@ export const jmFetchPageToLocalFile = async (
   sourceFileName: string,
   epId: number,
   deps: { getOnlineImageCachePath: (namespace: string, fileName: string) => string },
+  reload = false,
 ): Promise<string> => {
   const path = deps.getOnlineImageCachePath(namespace, cacheFileName)
   const pngPath = path.replace(/\.[^.]+$/, ".png")
-  if (FileManager.existsSync(pngPath)) return pngPath
-  if (FileManager.existsSync(path)) return path
+  if (!reload && FileManager.existsSync(pngPath)) return pngPath
+  if (!reload && FileManager.existsSync(path)) return path
   const response = await fetch(url, { headers: jmImageHeaders(), timeout: 30 })
   if (!response.ok) throw new Error(`JM 图片请求失败 (${response.status})`)
   const buffer = await response.arrayBuffer()

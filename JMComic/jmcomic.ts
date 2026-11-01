@@ -63,7 +63,7 @@ type JMDeps = {
   resolveAbsoluteUrl: (url?: string) => string | undefined
   coverUrl: (cdnBase: string, id: string) => string
   buildAbsoluteOnlineThumb: (url?: string, originalName?: string) => OnlineThumb
-  fetchPageToLocalFile: (url: string, namespace: string, cacheFileName: string, sourceFileName: string, epId: number) => Promise<string>
+  fetchPageToLocalFile: (url: string, namespace: string, cacheFileName: string, sourceFileName: string, epId: number, reload?: boolean) => Promise<string>
 }
 
 const jmSearchResultItems = (payload: JMSearchResp): JMComicItem[] => (
@@ -183,7 +183,7 @@ const jmParseAlbumDetail = (comicId: string, payload: JMAlbumResp, cdnBase: stri
 }
 
 const jmParseChapters = (comicId: string, payload: JMAlbumResp): OnlineChapter[] => {
-  const series = Array.isArray(payload?.series) ? [...payload.series] : []
+  const series = Array.isArray(payload?.series) ? [...new Map(payload.series.filter(item => item && /^\d+$/.test(String(item.id ?? ""))).map(item => [String(item.id), item])).values()] : []
   if (series.length === 0) {
     return [{ id: comicId, title: "第1話", order: 1, updatedAt: String(payload?.addtime ?? "") }]
   }
@@ -208,6 +208,7 @@ const jmBuildRandomKeyword = (): string => JM_TAG_KEYWORDS[Math.floor(Math.rando
 export const createJMComicAdapter = (source: SourceDescriptor, deps: JMDeps): ComicSourceAdapter => {
   let cachedCategories: OnlineCategory[] | null = null
   const albums = new Map<string, { expires: number; task: Promise<{ ctx: JMApiContext; comicId: string; album: JMAlbumResp }> }>()
+  const searchPageSizes = new Map<string, number>()
 
   const loadAlbum = async (comicId: string): Promise<{ ctx: JMApiContext; comicId: string; album: JMAlbumResp }> => {
     const cached = albums.get(comicId)
@@ -218,7 +219,7 @@ export const createJMComicAdapter = (source: SourceDescriptor, deps: JMDeps): Co
       const resolvedComicId = String(normalizedId ?? comicId).trim()
       const album = await deps.apiGet<JMAlbumResp>(ctx.domain, deps.albumPath(resolvedComicId))
       return { ctx, comicId: resolvedComicId, album }
-    })().catch(error => { albums.delete(comicId); throw error })
+    })().catch(error => { if (albums.get(comicId)?.task === task) albums.delete(comicId); throw error })
     albums.set(comicId, { expires: Date.now() + 120000, task })
     if (albums.size > 64) albums.delete(albums.keys().next().value!)
     return task
@@ -242,7 +243,7 @@ export const createJMComicAdapter = (source: SourceDescriptor, deps: JMDeps): Co
     },
     getMangaList: async (_auth, params) => {
       const ctx = await deps.ensureContext()
-      const page = Math.max(1, Number(params.page ?? 1))
+      const page = Number.isFinite(params.page) ? Math.max(1, Math.floor(params.page!)) : 1
       const order = JM_ORDER_MAP[params.sort ?? "dd"] ?? "mr"
       const categoryMap = Object.fromEntries(JM_CATEGORY_OPTIONS.map((item) => [item.title, item.id])) as Record<string, string>
       const sourceCategory = params.sourceLanguage && params.sourceLanguage !== "all" ? params.sourceLanguage : ""
@@ -260,7 +261,11 @@ export const createJMComicAdapter = (source: SourceDescriptor, deps: JMDeps): Co
       const payload = await deps.apiGet<JMSearchResp>(ctx.domain, path)
       const docs = jmSearchResultItems(payload).map((item) => jmParseComicItem(item, ctx.cdnBase, deps))
       const total = Math.max(docs.length, jmParseNumber(payload?.total, docs.length))
-      const pageSize = docs.length > 0 ? docs.length : 80
+      const pageSizeKey = JSON.stringify([keyword, category, order])
+      if (page === 1 && docs.length) searchPageSizes.set(pageSizeKey, docs.length)
+      if (searchPageSizes.size > 64) searchPageSizes.delete(searchPageSizes.keys().next().value!)
+      // A partial last page is not the API's page size.
+      const pageSize = searchPageSizes.get(pageSizeKey) || 80
       return {
         docs,
         page,
@@ -282,16 +287,18 @@ export const createJMComicAdapter = (source: SourceDescriptor, deps: JMDeps): Co
       const episodeId = String(payload?.id ?? chapter.id)
       const images = Array.isArray(payload?.images) ? payload.images : []
       if (images.length === 0) throw new Error("JMComic 章节图片为空")
+      if (images.some(name => typeof name !== "string" || !name.trim() || /[/\\?#]/.test(name))) throw new Error("JMComic 章节图片列表异常，请重试")
       const epNumber = jmParseNumber(episodeId, jmParseNumber(chapter.id, 0))
       return images.map((fileName, index) => {
-        const imageUrl = `${ctx.cdnBase}/media/photos/${episodeId}/${fileName}`
+        const imageUrl = `${ctx.cdnBase}/media/photos/${episodeId}/${encodeURIComponent(fileName)}`
         let task: Promise<string> | undefined
         return {
           id: `${chapter.id}_${index}`,
           media: deps.buildAbsoluteOnlineThumb(imageUrl, `${chapter.title}_${index + 1}`),
-          loadLocalFile: () => {
-            if (!task) task = deps.fetchPageToLocalFile(imageUrl, chapter.id, `${index + 1}_${fileName}`, fileName, epNumber)
-              .catch(error => { task = undefined; throw error })
+          loadLocalFile: (reload = false) => {
+            // Deduplicate in-flight requests, then check the disk cache on the next call.
+            if (!task) task = deps.fetchPageToLocalFile(imageUrl, chapter.id, `${index + 1}_${fileName}`, fileName, epNumber, reload)
+              .finally(() => { task = undefined })
             return task
           },
         }

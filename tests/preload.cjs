@@ -8,7 +8,7 @@ function load(name) {
   const js = ts.transpileModule(fs.readFileSync(file, 'utf8'), {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
   }).outputText;
-  vm.runInNewContext('(function(require,module,exports){' + js + '})')(
+  vm.runInNewContext('(function(require,module,exports){' + js + '})', { FileManager: { existsSync: () => true } })(
     id => load(path.relative(root, path.resolve(path.dirname(file), id))), module, module.exports);
   return module.exports;
 }

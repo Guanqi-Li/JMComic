@@ -67,18 +67,18 @@ export const loadOnlineReadingHistory = (): OnlineReadingRecord[] => {
   try {
     const parsed = JSON.parse(raw) as Partial<OnlineReadingRecord>[]
     return parsed
-      .filter(item => item && typeof item.comicId === "string" && typeof item.chapterOrder === "number")
+      .filter(item => item && typeof item.comicId === "string" && Number.isFinite(item.chapterOrder) && item.chapterOrder! > 0)
       .map((item): OnlineReadingRecord => ({
         comicId: String(item.comicId),
         comicTitle: String(item.comicTitle ?? "在线漫画"),
         comicAuthor: String(item.comicAuthor ?? ""),
-        comicCover: item.comicCover as OnlineThumb,
+        comicCover: { fileServer: typeof item.comicCover?.fileServer === "string" ? item.comicCover.fileServer : "", path: typeof item.comicCover?.path === "string" ? item.comicCover.path : "" },
         sourceId: typeof item.sourceId === "string" ? item.sourceId : undefined,
         chapterId: typeof item.chapterId === "string" ? item.chapterId : undefined,
         chapterTitle: String(item.chapterTitle ?? `第 ${Number(item.chapterOrder ?? 1)} 话`),
         chapterOrder: Number(item.chapterOrder ?? 1),
         progressText: String(item.progressText ?? "继续阅读"),
-        lastReadAt: Number(item.lastReadAt ?? 0),
+        lastReadAt: Number.isFinite(item.lastReadAt) ? Math.max(0, item.lastReadAt!) : 0,
         host: item.host === "picacomic" ? "picacomic" : "go2778",
       }))
       .sort((a, b) => b.lastReadAt - a.lastReadAt)

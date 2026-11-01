@@ -5,7 +5,7 @@ const makePages=id=>[0,1].map(index=>({id:id+'_'+index,index,loadLocalFile:async
 function evaluate(file,requireMock,context={}){const m={exports:{}};const js=ts.transpileModule(fs.readFileSync(path.join(root,file),'utf8'),{fileName:file,compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.React}}).outputText;vm.runInNewContext('(function(require,module,exports){'+js+'})',context)(requireMock,m,m.exports);return m.exports;}
 const {ChapterStream}=evaluate('features/reader/chapter-stream.ts',()=>({}));
 const pageQueue=evaluate('page-load-queue.ts',()=>({}));
-const {ReaderPreloader}=evaluate('features/reader/reader-preloader.ts',()=>pageQueue);
+const {ReaderPreloader}=evaluate('features/reader/reader-preloader.ts',()=>pageQueue,{FileManager:{existsSync:()=>true}});
 (async()=>{
  let calls=0;const stream=new ChapterStream(chapters,chapters[2],makePages('1'),async c=>{calls++;await Promise.resolve();return makePages(c.id)});
  await Promise.all([stream.appendNext(),stream.appendNext()]);assert.equal(calls,1);assert.equal(stream.segments.length,2);assert.equal(stream.pages.length,4);assert.equal(stream.pages[0].id,'1:1_0');assert.equal(stream.segmentAt(2).chapter.id,'2');assert.equal(stream.segmentAt(2).count,2);
@@ -14,7 +14,7 @@ const {ReaderPreloader}=evaluate('features/reader/reader-preloader.ts',()=>pageQ
  const pending=stale.appendNext();await stale.select(chapters[0]);release(makePages('2'));await pending;assert.equal(stale.segments.length,1);assert.equal(stale.segments[0].chapter.id,'3');
  console.log('PASS chapter order, deduplicated append, no skipped tail page, per-chapter boundaries, final chapter stops, stale request isolation');
 
- function fixture(lastPage=0) {
+ function fixture(lastPage=0,saveFails=false) {
   const slots=[],effects=[],timers=[],reads=[],saved=[],snapshots=[],presented=[];let cursor=0,dismissals=0;
   const native=new Proxy({
    useObservable:v=>{const i=cursor++;if(!slots[i])slots[i]={value:v,setValue(x){this.value=x}};return slots[i]},
@@ -24,7 +24,7 @@ const {ReaderPreloader}=evaluate('features/reader/reader-preloader.ts',()=>pageQ
   },{get:(obj,k)=>k in obj?obj[k]:String(k)});
   const DeferredPageImage=()=>{};
   const context={Date,Promise,console,setTimeout:(fn,delay)=>{timers.push({fn,delay,cancelled:false});return timers.length},clearTimeout:id=>{if(timers[id-1])timers[id-1].cancelled=true},React:{createElement:(type,props,...children)=>({type,props:props||{},children:children.flat(Infinity)})}};
-  const mocks=id=>id==='scripting'?native:id==='./chapter-stream'?{ChapterStream}:id==='./reader-preloader'?{ReaderPreloader}:id==='./deferred-page-image'?{DeferredPageImage}:id==='../../online-storage'?{buildOnlineReaderProgressKey:i=>i.chapterId,getOnlineChapterProgress:()=>({lastPage,totalPages:2,lastReadAt:100}),pushOnlineReadingHistory:r=>snapshots.push(r)}:id==='../../library-storage'?{saveProgressData:(...args)=>saved.push(args)}:id==='../../jm-account'?{recordJMAccountReading:async id=>reads.push(id)}:{};
+  const mocks=id=>id==='scripting'?native:id==='./chapter-stream'?{ChapterStream}:id==='./reader-preloader'?{ReaderPreloader}:id==='./deferred-page-image'?{DeferredPageImage}:id==='../../online-storage'?{buildOnlineReaderProgressKey:i=>i.chapterId,getOnlineChapterProgress:()=>({lastPage,totalPages:2,lastReadAt:100}),pushOnlineReadingHistory:r=>snapshots.push(r)}:id==='../../library-storage'?{saveProgressData:(...args)=>{if(saveFails)throw new Error('Storage unavailable');saved.push(args)}}:id==='../../jm-account'?{recordJMAccountReading:async id=>reads.push(id)}:{};
   const {ComicReaderView}=evaluate('features/reader/comic-reader-view.tsx',mocks,context);
   const props={fileName:'Mock',initialPages:makePages('1'),onlineProgress:{sourceId:'zh.jmcomic',comicId:'42',chapterId:'1',chapterOrder:1,comicTitle:'Mock',chapterTitle:'One',host:'go2778'},chapters,selectedChapter:chapters[2],loadChapterPages:async c=>makePages(c.id)};
   const render=()=>{cursor=0;return ComicReaderView(props)};
@@ -102,5 +102,8 @@ const {ReaderPreloader}=evaluate('features/reader/reader-preloader.ts',()=>pageQ
  assert.equal(short.images().length,4);assert.equal(short.scroll().props.scrollPosition.value,'1:1_0');
  short.images()[3].props.onLoaded();await settle();assert.equal(short.images().length,4);
  console.log('PASS short chapters append from actual native end visibility, without chaining on stale lazy callbacks');
+ const corrupted=fixture();await settle();corrupted.images()[0].props.onLoaded();corrupted.images()[0].props.onInvalidate();corrupted.flush(800);assert.equal(corrupted.snapshots.length,0);corrupted.show();corrupted.button('返回').props.action();assert.equal(corrupted.snapshots.length,0);
+ const unavailable=fixture(0,true);await settle();unavailable.images()[0].props.onLoaded();unavailable.flush(800);unavailable.show();unavailable.button('返回').props.action();assert.equal(unavailable.dismissals,1);
+ console.log('PASS storage failures cannot throw from the debounce timer or trap the reader on exit');
  console.log('PASS one-shot restoration, no late timer snapback, unconfirmed close cannot erase saved progress, explicit chapter selection starts at page one');
 })().catch(error=>{console.error(error);process.exitCode=1});

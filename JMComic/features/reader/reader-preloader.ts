@@ -5,12 +5,21 @@ import type { ChapterStream } from "./chapter-stream"
 type PendingPage = { task: Promise<string>; visible: boolean; valid: () => boolean; path?: string }
 
 export class ReaderPreloader {
-  private pending = new WeakMap<() => Promise<string>, PendingPage>()
+  private pending = new WeakMap<NonNullable<PageItem["loadLocalFile"]>, PendingPage>()
+  private reload = new WeakSet<NonNullable<PageItem["loadLocalFile"]>>()
   private generation = 0
   private active = true
+  constructor(private exists: (path: string) => boolean = path => FileManager.existsSync(path)) {}
 
   cachedPath(page: PageItem): string {
+    // Rendering the full chapter must not perform a synchronous disk lookup per row.
     return page.path || (page.loadLocalFile ? this.pending.get(page.loadLocalFile)?.path : "") || ""
+  }
+
+  invalidate(page: PageItem): void {
+    if (!page.loadLocalFile) return
+    this.pending.delete(page.loadLocalFile)
+    this.reload.add(page.loadLocalFile)
   }
 
   // Foreground and background requests share one task and the decoded local file.
@@ -18,7 +27,7 @@ export class ReaderPreloader {
     const loader = page.loadLocalFile
     if (!loader) return Promise.resolve(page.path || "")
     const existing = this.pending.get(loader)
-    if (existing) {
+    if (existing && (!existing.path || this.exists(existing.path))) {
       existing.visible ||= visible
       existing.valid = valid
       return existing.task
@@ -26,15 +35,20 @@ export class ReaderPreloader {
     const entry: PendingPage = { task: Promise.resolve(""), visible, valid }
     entry.task = withPageLoadSlot(async () => {
       if (!this.active || (!entry.visible && !entry.valid())) return ""
-      const path = await loader()
+      const path = await loader(this.reload.has(loader))
       if (!path) throw new Error("图片数据为空")
       return path
     }, () => entry.visible ? 1 : 0).then(path => {
       entry.path = path
-      if (!path) this.pending.delete(loader)
+      if (path) this.reload.delete(loader)
+      else {
+        if (this.pending.get(loader) === entry) this.pending.delete(loader)
+        // A foreground request can arrive just as an obsolete prefetch is skipped.
+        if (entry.visible && this.active) return this.load(page)
+      }
       return path
     }).catch(error => {
-      this.pending.delete(loader)
+      if (this.pending.get(loader) === entry) this.pending.delete(loader)
       throw error
     })
     this.pending.set(loader, entry)

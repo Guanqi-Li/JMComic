@@ -9,9 +9,9 @@ export class ChapterStream {
   private epoch = 0
   private tasks = new Map<string, Promise<PageItem[]>>()
   constructor(chapters: OnlineChapter[], selected: OnlineChapter, pages: PageItem[], private load: (chapter: OnlineChapter) => Promise<PageItem[]>) {
-    this.chapters = [...chapters].sort((a, b) => a.order - b.order)
-    if (!this.chapters.some(chapter => chapter.id === selected.id)) this.chapters.push(selected)
+    this.chapters = [...new Map([...chapters, selected].map(chapter => [chapter.id, chapter])).values()].sort((a, b) => a.order - b.order)
     this.append(selected, pages)
+    this.tasks.set(selected.id, Promise.resolve(pages))
   }
   private append(chapter: OnlineChapter, pages: PageItem[]): void {
     if (!pages.length) throw new Error("章节图片为空")
@@ -33,7 +33,8 @@ export class ChapterStream {
     return this.segments.find(segment => page >= segment.start && page < segment.start + segment.count) ?? this.segments[0]
   }
   adjacent(chapter: OnlineChapter, direction: number): OnlineChapter | undefined {
-    return this.chapters[this.chapters.findIndex(item => item.id === chapter.id) + direction]
+    const index = this.chapters.findIndex(item => item.id === chapter.id)
+    return index < 0 ? undefined : this.chapters[index + direction]
   }
   async prefetchNext(chapter: OnlineChapter): Promise<PageItem[]> {
     const next = this.adjacent(chapter, 1)

@@ -37,7 +37,10 @@ export const parseAccountPage = (html: string, kind: AccountListKind, page = 1):
     const anchor = block.match(new RegExp(`<a\\b[^>]*href=["']/album/${id}/?[^"']*["'][^>]*>([\\s\\S]*?)</a>`, "i"))?.[1]
     if (!anchor) return
     const title = decodeHTML(anchor.match(/<div\b[^>]*class=["'][^"']*(?:video-title|image-item-text)[^"']*["'][^>]*>([\s\S]*?)<\/div>/i)?.[1] ?? "")
-    const image = anchor.match(/<img\b[^>]*(?:data-original|data-src|src)=["']([^"']+)["']/i)?.[1] ?? ""
+    const imageTag = anchor.match(/<img\b[^>]*>/i)?.[0] ?? ""
+    const image = imageTag.match(/\bdata-original=["']([^"']+)["']/i)?.[1]
+      ?? imageTag.match(/\bdata-src=["']([^"']+)["']/i)?.[1]
+      ?? imageTag.match(/\bsrc=["']([^"']+)["']/i)?.[1] ?? ""
     const src = decodeHTML(image)
     const url = /^https:\/\//i.test(src) ? src : src.startsWith("//") ? `https:${src}` : src.startsWith("/") ? `${JM_ACCOUNT_ORIGIN}${src}` : ""
     if (!title || !url) return

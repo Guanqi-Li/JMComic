@@ -73,7 +73,9 @@ export function ComicReaderView(props: ReaderProps) {
     props.onProgressUpdate?.()
   }
   const saveConfirmed = (): void => {
-    if (confirmed.current) snapshot(confirmed.current.segment, confirmed.current.page)
+    if (!confirmed.current) return
+    try { snapshot(confirmed.current.segment, confirmed.current.page) }
+    catch (error) { if (alive.current) historyWarning.setValue(error instanceof Error ? error.message : "阅读进度保存失败") }
   }
   const returnToDetails = (): void => {
     if (closing.current) return
@@ -211,6 +213,13 @@ export function ComicReaderView(props: ReaderProps) {
         <LazyVStack key="reader-pages" spacing={0} scrollTargetLayout>
           {pages.value.map(item => <DeferredPageImage key={item.id}
             item={item} cachedPath={preloader.cachedPath(item)}
+            onInvalidate={() => {
+              loaded.current.delete(item.id); preloader.invalidate(item)
+              if (confirmed.current?.page === item.index) {
+                confirmed.current = null
+                if (saveTimer.current) clearTimeout(saveTimer.current)
+              }
+            }}
             loadPage={() => preloader.load(item)} viewport={geometry.size}
             frame={{ maxWidth: "infinity" }} onTapGesture={toggleControls}
             onLoaded={() => onPageLoaded(item.id)} />)}

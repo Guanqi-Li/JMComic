@@ -48,27 +48,32 @@ export const cleanupTempComicCaches = (): void => {
   } catch { /**/ }
 }
 
+const normalizeProgress = (progress: Partial<ProgressData>): ProgressData => {
+  const totalPages = Number.isFinite(progress.totalPages) ? Math.max(0, Math.floor(progress.totalPages!)) : 0
+  return {
+    totalPages,
+    lastPage: totalPages > 0 && Number.isFinite(progress.lastPage) ? Math.min(totalPages - 1, Math.max(0, Math.floor(progress.lastPage!))) : 0,
+    lastReadAt: Number.isFinite(progress.lastReadAt) ? Math.max(0, progress.lastReadAt!) : 0,
+  }
+}
+
 export const loadProgress = (name: string): ProgressData => {
   const raw = Storage.get<string>(`comic_${name}`)
   if (raw) {
     try {
       const parsed = JSON.parse(raw) as Partial<ProgressData>
-      return {
-        lastPage: typeof parsed.lastPage === "number" ? parsed.lastPage : 0,
-        totalPages: typeof parsed.totalPages === "number" ? parsed.totalPages : 0,
-        lastReadAt: typeof parsed.lastReadAt === "number" ? parsed.lastReadAt : 0,
-      }
+      return normalizeProgress(parsed)
     } catch { /**/ }
   }
   return { lastPage: 0, totalPages: 0, lastReadAt: 0 }
 }
 
 export const saveProgressData = (name: string, page: number, total: number, lastReadAt?: number): void => {
-  Storage.set(`comic_${name}`, JSON.stringify({
+  Storage.set(`comic_${name}`, JSON.stringify(normalizeProgress({
     lastPage: page,
     totalPages: total,
     lastReadAt: typeof lastReadAt === "number" ? lastReadAt : (total > 0 ? Date.now() : 0),
-  }))
+  })))
 }
 
 export const metaKey = (name: string): string => `comic_meta_${name}`
