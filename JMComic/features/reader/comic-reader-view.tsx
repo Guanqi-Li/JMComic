@@ -4,6 +4,7 @@ import {
 } from "scripting"
 import { DeferredPageImage } from "./deferred-page-image"
 import { ChapterStream, ChapterSegment } from "./chapter-stream"
+import { ReaderPreloader } from "./reader-preloader"
 import { buildOnlineReaderProgressKey, getOnlineChapterProgress, pushOnlineReadingHistory } from "../../online-storage"
 import { saveProgressData } from "../../library-storage"
 import { recordJMAccountReading } from "../../jm-account"
@@ -35,6 +36,9 @@ export function ComicReaderView(props: ReaderProps) {
   const streamRef = useRef<ChapterStream | null>(null)
   if (!streamRef.current) streamRef.current = new ChapterStream(props.chapters, props.selectedChapter, props.initialPages, props.loadChapterPages)
   const stream = streamRef.current
+  const preloaderRef = useRef<ReaderPreloader | null>(null)
+  if (!preloaderRef.current) preloaderRef.current = new ReaderPreloader()
+  const preloader = preloaderRef.current
   const pages = useObservable(stream.pages)
   const current = useObservable(props.selectedChapter)
   const controls = useObservable(false)
@@ -59,6 +63,7 @@ export function ComicReaderView(props: ReaderProps) {
     if (closing.current) return
     closing.current = true
     alive.current = false
+    preloader.stop()
     jumpToken.current += 1
     if (saveTimer.current) clearTimeout(saveTimer.current)
     if (hideTimer.current) clearTimeout(hideTimer.current)
@@ -81,6 +86,7 @@ export function ComicReaderView(props: ReaderProps) {
     const page = Math.min(...visible.current)
     const segment = stream.segmentAt(page)
     currentPage.current = page
+    preloader.update(stream, page)
     if (current.value.id !== segment.chapter.id) current.setValue(segment.chapter)
     if (saveTimer.current) clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(() => snapshot(segment, page), 800)
@@ -101,6 +107,8 @@ export function ComicReaderView(props: ReaderProps) {
     if (!target) return
     const token = ++jumpToken.current
     currentPage.current = index
+    preloader.load(stream.pages[index]).catch(() => {})
+    preloader.update(stream, index)
     for (const delay of [100, 300]) setTimeout(() => {
       if (alive.current && token === jumpToken.current) proxy.current?.scrollTo(target, "top")
     }, delay)
@@ -120,6 +128,7 @@ export function ComicReaderView(props: ReaderProps) {
   }
   const choose = async (chapter: OnlineChapter): Promise<void> => {
     if (busy.value) return
+    preloader.cancel()
     if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null }
     snapshot(stream.segmentAt(currentPage.current), currentPage.current)
     controls.setValue(false); error.setValue("")
@@ -143,6 +152,7 @@ export function ComicReaderView(props: ReaderProps) {
     alive.current = true
     return () => {
       alive.current = false; jumpToken.current += 1
+      preloader.stop()
       if (saveTimer.current) clearTimeout(saveTimer.current)
       if (hideTimer.current) clearTimeout(hideTimer.current)
       snapshot(stream.segmentAt(currentPage.current), currentPage.current)
@@ -167,6 +177,7 @@ export function ComicReaderView(props: ReaderProps) {
         <LazyVStack spacing={0}>
           {pages.value.map(item => <DeferredPageImage key={item.id}
             item={{ ...item, loadLocalFile: item.loadLocalFile || (item.path ? async () => item.path! : undefined) }}
+            loadPage={() => preloader.load(item)}
             frame={{ maxWidth: "infinity" }} onTapGesture={toggleControls}
             onAppear={() => { visible.current.add(item.index); report() }}
             onDisappear={() => { visible.current.delete(item.index); report() }}

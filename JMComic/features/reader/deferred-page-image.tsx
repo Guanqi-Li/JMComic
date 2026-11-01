@@ -4,6 +4,7 @@ import type { PageItem } from "../../types"
 
 export function DeferredPageImage(props: {
   item: PageItem
+  loadPage?: () => Promise<string>
   frame: { maxWidth?: "infinity"; maxHeight?: "infinity" }
   onAppear?: () => void
   onDisappear?: () => void
@@ -16,10 +17,10 @@ export function DeferredPageImage(props: {
   const mounted = useRef(true)
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
   const load = async (): Promise<void> => {
-    if (busy.value || path.value || !props.item.loadLocalFile) return
+    if (busy.value || path.value || (!props.loadPage && !props.item.loadLocalFile)) return
     busy.setValue(true); error.setValue("")
     try {
-      const value = await withPageLoadSlot(props.item.loadLocalFile)
+      const value = props.loadPage ? await props.loadPage() : await withPageLoadSlot(props.item.loadLocalFile!)
       if (!value) throw new Error("图片数据为空")
       if (mounted.current) {
         path.setValue(value)
@@ -29,7 +30,7 @@ export function DeferredPageImage(props: {
     finally { if (mounted.current) busy.setValue(false) }
   }
   return <VStack spacing={0} frame={{ ...props.frame, minHeight: path.value ? 0 : 180 }}
-    onAppear={() => { props.onAppear?.(); load().catch(() => {}) }} onDisappear={props.onDisappear} onTapGesture={props.onTapGesture}>
+    onAppear={() => { load().catch(() => {}); props.onAppear?.() }} onDisappear={props.onDisappear} onTapGesture={props.onTapGesture}>
     {path.value ? <Image filePath={path.value} resizable aspectRatio={{ value: null, contentMode: "fit" }} frame={props.frame}
       onError={() => { path.setValue(""); error.setValue("图片无法显示") }} />
       : error.value ? <VStack spacing={10} padding={20}>

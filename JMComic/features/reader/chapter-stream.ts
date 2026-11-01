@@ -22,7 +22,10 @@ export class ChapterStream {
   private fetch(chapter: OnlineChapter): Promise<PageItem[]> {
     const existing = this.tasks.get(chapter.id)
     if (existing) return existing
-    const task = this.load(chapter).catch(error => { this.tasks.delete(chapter.id); throw error })
+    const task = this.load(chapter).then(pages => {
+      if (!pages.length) throw new Error("章节图片为空")
+      return pages
+    }).catch(error => { this.tasks.delete(chapter.id); throw error })
     this.tasks.set(chapter.id, task)
     return task
   }
@@ -31,6 +34,13 @@ export class ChapterStream {
   }
   adjacent(chapter: OnlineChapter, direction: number): OnlineChapter | undefined {
     return this.chapters[this.chapters.findIndex(item => item.id === chapter.id) + direction]
+  }
+  async prefetchNext(chapter: OnlineChapter): Promise<PageItem[]> {
+    const next = this.adjacent(chapter, 1)
+    if (!next) return []
+    const epoch = this.epoch
+    const pages = await this.fetch(next)
+    return epoch === this.epoch ? pages : []
   }
   async appendNext(): Promise<boolean> {
     const tail = this.segments[this.segments.length - 1].chapter
