@@ -1,6 +1,6 @@
 # JMComic
 
-用于 Scripting 的私人漫画阅读脚本。当前版本 **4.2.7**。
+用于 Scripting 的私人漫画阅读脚本。当前版本 **4.2.8**。
 
 ## 远程导入
 
@@ -39,6 +39,10 @@ https://raw.githubusercontent.com/Guanqi-Li/JMComic/main/dist/JMComic.zip
 脚本基于用户提供的原始阅读脚本改造，保留原有 JM 请求与图片还原实现。网络可用性取决于 JMComic 网站、接口和当前网络。
 
 远程导入与更新行为参见 [Scripting 官方文档](https://scriptingapp.github.io/guide/Script/Script)。
+
+## 4.2.8
+
+- 页码标识放在原生页面容器上，可见页统一驱动续读进度与预加载。滚动回调没有更新时，通过逐页出现和离开继续追踪，并忽略已离屏页的迟到定位回报。
 
 ## 4.2.7
 

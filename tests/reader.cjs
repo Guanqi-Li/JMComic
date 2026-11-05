@@ -118,6 +118,26 @@ const {ReaderPreloader}=evaluate('features/reader/reader-preloader.ts',()=>pageQ
  assert.equal(prefetch.positionWrites().length,0);
  assert.equal(prefetch.snapshots.length,0);
  console.log('PASS visible pages advance the five-page prefetch window without scroll feedback or progress writes');
+ // Reproduce the 56-page report with both native scroll callbacks silent.
+ const long=fixture(1,false,[chapters[2]],56);await settle();
+ const longImages=long.images();
+ const targets=long.nodes().find(node=>node.props.scrollTargetLayout).children;
+ assert.equal(targets[55].type,'VStack');
+ assert.equal(targets[55].props.key,'1:1_55');
+ longImages[1].props.onAppear();longImages[1].props.onLoaded();
+ for(let index=2;index<56;index++){
+  longImages[index].props.onAppear();
+  longImages[index-1].props.onDisappear();
+  await settle();
+  if(index<55)assert(long.images()[index+1].props.cachedPath);
+  longImages[index].props.onLoaded();
+ }
+ long.change('1:1_1'); // An old scroll report arrives after its row left the screen.
+ long.show();long.button('返回').props.action();
+ assert.equal(long.saved.at(-1)[1],55);
+ assert.equal(long.snapshots.at(-1).progressText,'已读完');
+ assert.equal(long.positionWrites().length,0);
+ console.log('PASS page lifecycle keeps prefetch moving and saves page 56 without native scroll feedback');
  const earlyClose=fixture(1);await settle();assert.equal(earlyClose.binding().value,'1:1_1');
  earlyClose.show();earlyClose.button('返回').props.action();assert.equal(earlyClose.snapshots.length,0);
  const restored=fixture(1);await settle();

@@ -54,6 +54,8 @@ export function ComicReaderView(props: ReaderProps) {
   const position = useObservable<string | null>(stream.pages[initialIndex.current]?.id ?? null)
   const loaded = useRef(new Set<string>())
   const visibleTargets = useRef(new Set<string>())
+  const mountedPages = useRef(new Set<string>())
+  const hasLeftPage = useRef(false)
   const prefetchPageId = useRef<string | null>(null)
   const currentPage = useRef(initialIndex.current)
   const confirmed = useRef<{ segment: ChapterSegment; page: number } | null>(null)
@@ -97,7 +99,7 @@ export function ComicReaderView(props: ReaderProps) {
     if (!alive.current || !stream.pages[page]) return
     currentPage.current = page
     const segment = stream.segmentAt(page)
-    if (visibleTargets.current.size === 0) prefetchFrom(page)
+    prefetchFrom(page)
     if (current.value.id !== segment.chapter.id) current.setValue(segment.chapter)
     if (saveTimer.current) clearTimeout(saveTimer.current)
     // Lazy creation and background decoding never count as reading a page.
@@ -115,8 +117,33 @@ export function ComicReaderView(props: ReaderProps) {
   const onPositionChanged = (id: string | number | null): void => {
     if (!alive.current || typeof id !== "string") return
     const index = stream.pages.findIndex(page => page.id === id)
-    if (index < 0) return
+    if (index < 0 || (mountedPages.current.size > 0 && !mountedPages.current.has(id))) return
+    if (visibleTargets.current.size > 0 && !visibleTargets.current.has(id)) return
     report(index)
+  }
+  const syncVisiblePage = (): void => {
+    if (!alive.current) return
+    const mounted = mountedPages.current
+    const visible = stream.pages.find(page => visibleTargets.current.has(page.id) &&
+      (mounted.size === 0 || mounted.has(page.id)))
+    const currentId = stream.pages[currentPage.current]?.id ?? ""
+    const fallback = hasLeftPage.current && !mounted.has(currentId)
+      ? stream.pages.find(page => mounted.has(page.id))
+      : undefined
+    const page = visible ?? fallback
+    if (page && page.index !== currentPage.current) report(page.index)
+    else prefetchFrom(currentPage.current)
+  }
+  const pageAppeared = (item: PageItem): void => {
+    if (!alive.current || stream.pages[item.index] !== item) return
+    mountedPages.current.add(item.id)
+    syncVisiblePage()
+  }
+  const pageDisappeared = (item: PageItem): void => {
+    if (stream.pages[item.index] !== item || !mountedPages.current.delete(item.id)) return
+    visibleTargets.current.delete(item.id)
+    hasLeftPage.current = true
+    syncVisiblePage()
   }
   const armHide = (): void => {
     if (hideTimer.current) clearTimeout(hideTimer.current)
@@ -132,6 +159,7 @@ export function ComicReaderView(props: ReaderProps) {
     current.setValue(stream.segmentAt(index).chapter)
     preloader.load(target).catch(() => {})
     visibleTargets.current.clear()
+    hasLeftPage.current = false
     prefetchFrom(index)
     // Only deliberate chapter navigation writes a target from the script.
     position.setValue(target.id)
@@ -182,6 +210,7 @@ export function ComicReaderView(props: ReaderProps) {
       await stream.select(chapter)
       if (!alive.current) return
       loaded.current.clear()
+      mountedPages.current.clear()
       visibleTargets.current.clear()
       pages.setValue(stream.pages)
       jump(0)
@@ -217,25 +246,26 @@ export function ComicReaderView(props: ReaderProps) {
         onScrollTargetVisibilityChange={{ idType: "string", threshold: 0, onChanged: ids => {
           if (!alive.current) return
           visibleTargets.current = new Set(ids.filter((id): id is string => typeof id === "string"))
-          // Advance the cache even when the scroll binding delivers no position update.
-          const firstVisible = stream.pages.findIndex(page => visibleTargets.current.has(page.id))
-          if (firstVisible >= 0) prefetchFrom(firstVisible)
+          syncVisiblePage()
           maybeAppend()
         } }}
         ignoresSafeArea={{ regions: "container", edges: "all" }} frame={{ maxWidth: "infinity", maxHeight: "infinity" }}>
         <LazyVStack key="reader-pages" spacing={0} scrollTargetLayout>
-          {pages.value.map(item => <DeferredPageImage key={item.id}
-            item={item} cachedPath={preloader.cachedPath(item)}
-            onInvalidate={() => {
-              loaded.current.delete(item.id); preloader.invalidate(item)
-              if (confirmed.current?.page === item.index) {
-                confirmed.current = null
-                if (saveTimer.current) clearTimeout(saveTimer.current)
-              }
-            }}
-            loadPage={() => preloader.load(item)} viewport={geometry.size}
-            frame={{ maxWidth: "infinity" }} onTapGesture={toggleControls}
-            onLoaded={() => onPageLoaded(item.id)} />)}
+          {pages.value.map(item => <VStack key={item.id} spacing={0}>
+            <DeferredPageImage
+              item={item} cachedPath={preloader.cachedPath(item)}
+              onInvalidate={() => {
+                loaded.current.delete(item.id); preloader.invalidate(item)
+                if (confirmed.current?.page === item.index) {
+                  confirmed.current = null
+                  if (saveTimer.current) clearTimeout(saveTimer.current)
+                }
+              }}
+              loadPage={() => preloader.load(item)} viewport={geometry.size}
+              frame={{ maxWidth: "infinity" }} onTapGesture={toggleControls}
+              onAppear={() => pageAppeared(item)} onDisappear={() => pageDisappeared(item)}
+              onLoaded={() => onPageLoaded(item.id)} />
+          </VStack>)}
         </LazyVStack>
       </ScrollView>
     }</GeometryReader>

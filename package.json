@@ -1,7 +1,7 @@
 {
   "name": "jmcomic-scripting",
   "private": true,
-  "version": "4.2.7",
+  "version": "4.2.8",
   "scripts": {
     "test": "node tests/core.cjs && node tests/reader.cjs && node tests/detail.cjs && node tests/preload.cjs && node tests/reader-images.cjs && node tests/reliability.cjs && node tests/ui-races.cjs && node tests/protocol.cjs"
   },
