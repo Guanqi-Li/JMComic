@@ -105,6 +105,19 @@ const {ReaderPreloader}=evaluate('features/reader/reader-preloader.ts',()=>pageQ
  assert.equal(single.positionWrites().length,0);
  assert.equal(single.saved.at(-1)[1],4);
  console.log('PASS single-chapter scrolling and rerenders do not send scroll targets back to native');
+ // Native visibility can advance while the observable still holds the restored page.
+ const prefetch=fixture(0,false,[chapters[2]],14);await settle();
+ assert.equal(prefetch.images()[5].props.cachedPath,'/decoded/15.png');
+ assert.equal(prefetch.images()[8].props.cachedPath,'');
+ prefetch.scroll().props.onScrollTargetVisibilityChange.onChanged(['1:1_7','1:1_6']);
+ await settle();
+ assert.equal(prefetch.images()[8].props.cachedPath,'/decoded/18.png');
+ assert.equal(prefetch.images()[11].props.cachedPath,'/decoded/111.png');
+ assert.equal(prefetch.images()[12].props.cachedPath,'');
+ assert.equal(prefetch.binding().value,'1:1_0');
+ assert.equal(prefetch.positionWrites().length,0);
+ assert.equal(prefetch.snapshots.length,0);
+ console.log('PASS visible pages advance the five-page prefetch window without scroll feedback or progress writes');
  const earlyClose=fixture(1);await settle();assert.equal(earlyClose.binding().value,'1:1_1');
  earlyClose.show();earlyClose.button('返回').props.action();assert.equal(earlyClose.snapshots.length,0);
  const restored=fixture(1);await settle();

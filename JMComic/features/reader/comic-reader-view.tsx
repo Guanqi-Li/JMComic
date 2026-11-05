@@ -54,6 +54,7 @@ export function ComicReaderView(props: ReaderProps) {
   const position = useObservable<string | null>(stream.pages[initialIndex.current]?.id ?? null)
   const loaded = useRef(new Set<string>())
   const visibleTargets = useRef(new Set<string>())
+  const prefetchPageId = useRef<string | null>(null)
   const currentPage = useRef(initialIndex.current)
   const confirmed = useRef<{ segment: ChapterSegment; page: number } | null>(null)
   const saveTimer = useRef<any>(null)
@@ -86,11 +87,17 @@ export function ComicReaderView(props: ReaderProps) {
     saveConfirmed()
     dismiss()
   }
+  const prefetchFrom = (index: number): void => {
+    const page = stream.pages[index]
+    if (!alive.current || !page || prefetchPageId.current === page.id) return
+    prefetchPageId.current = page.id
+    preloader.update(stream, index)
+  }
   const report = (page: number): void => {
     if (!alive.current || !stream.pages[page]) return
     currentPage.current = page
     const segment = stream.segmentAt(page)
-    preloader.update(stream, page)
+    if (visibleTargets.current.size === 0) prefetchFrom(page)
     if (current.value.id !== segment.chapter.id) current.setValue(segment.chapter)
     if (saveTimer.current) clearTimeout(saveTimer.current)
     // Lazy creation and background decoding never count as reading a page.
@@ -124,7 +131,8 @@ export function ComicReaderView(props: ReaderProps) {
     currentPage.current = index
     current.setValue(stream.segmentAt(index).chapter)
     preloader.load(target).catch(() => {})
-    preloader.update(stream, index)
+    visibleTargets.current.clear()
+    prefetchFrom(index)
     // Only deliberate chapter navigation writes a target from the script.
     position.setValue(target.id)
   }
@@ -163,6 +171,7 @@ export function ComicReaderView(props: ReaderProps) {
   const choose = async (chapter: OnlineChapter): Promise<void> => {
     if (busy.value || chapter.id === current.value.id) return
     preloader.cancel()
+    prefetchPageId.current = null
     if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null }
     saveConfirmed()
     controls.setValue(false); error.setValue("")
@@ -187,7 +196,7 @@ export function ComicReaderView(props: ReaderProps) {
     alive.current = true
     position.subscribe(onPositionChanged)
     preloader.load(stream.pages[currentPage.current]).catch(() => {})
-    preloader.update(stream, currentPage.current)
+    prefetchFrom(currentPage.current)
     return () => {
       alive.current = false
       position.unsubscribe(onPositionChanged)
@@ -208,6 +217,9 @@ export function ComicReaderView(props: ReaderProps) {
         onScrollTargetVisibilityChange={{ idType: "string", threshold: 0, onChanged: ids => {
           if (!alive.current) return
           visibleTargets.current = new Set(ids.filter((id): id is string => typeof id === "string"))
+          // Advance the cache even when the scroll binding delivers no position update.
+          const firstVisible = stream.pages.findIndex(page => visibleTargets.current.has(page.id))
+          if (firstVisible >= 0) prefetchFrom(firstVisible)
           maybeAppend()
         } }}
         ignoresSafeArea={{ regions: "container", edges: "all" }} frame={{ maxWidth: "infinity", maxHeight: "infinity" }}>
