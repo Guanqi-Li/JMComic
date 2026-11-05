@@ -109,7 +109,6 @@ export function ComicReaderView(props: ReaderProps) {
     if (!alive.current || typeof id !== "string") return
     const index = stream.pages.findIndex(page => page.id === id)
     if (index < 0) return
-    if (position.value !== id) position.setValue(id)
     report(index)
   }
   const armHide = (): void => {
@@ -126,7 +125,7 @@ export function ComicReaderView(props: ReaderProps) {
     current.setValue(stream.segmentAt(index).chapter)
     preloader.load(target).catch(() => {})
     preloader.update(stream, index)
-    // One native position binding owns both restoration and explicit navigation.
+    // Only deliberate chapter navigation writes a target from the script.
     position.setValue(target.id)
   }
   const append = async (): Promise<void> => {
@@ -156,7 +155,7 @@ export function ComicReaderView(props: ReaderProps) {
   const onPageLoaded = (id: string): void => {
     if (!alive.current || !stream.pages.some(page => page.id === id)) return
     loaded.current.add(id)
-    if (position.value === id) {
+    if (stream.pages[currentPage.current]?.id === id) {
       report(currentPage.current)
     }
     maybeAppend()
@@ -186,10 +185,12 @@ export function ComicReaderView(props: ReaderProps) {
   }
   useEffect(() => {
     alive.current = true
+    position.subscribe(onPositionChanged)
     preloader.load(stream.pages[currentPage.current]).catch(() => {})
     preloader.update(stream, currentPage.current)
     return () => {
       alive.current = false
+      position.unsubscribe(onPositionChanged)
       preloader.stop()
       if (saveTimer.current) clearTimeout(saveTimer.current)
       if (hideTimer.current) clearTimeout(hideTimer.current)
@@ -203,7 +204,7 @@ export function ComicReaderView(props: ReaderProps) {
     statusBarHidden persistentSystemOverlays="hidden" toolbarVisibility="hidden">
     <GeometryReader key="reader-viewport" ignoresSafeArea={{ regions: "container", edges: "all" }}>{geometry =>
       <ScrollView key="reader-scroll" background={{ style: "black", shape: "rect" }}
-        scrollPosition={{ value: position.value, onChanged: onPositionChanged, anchor: "top" }}
+        scrollPosition={{ value: position, anchor: "top" }}
         onScrollTargetVisibilityChange={{ idType: "string", threshold: 0, onChanged: ids => {
           if (!alive.current) return
           visibleTargets.current = new Set(ids.filter((id): id is string => typeof id === "string"))
